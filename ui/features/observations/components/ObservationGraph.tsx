@@ -41,6 +41,8 @@ type ObservationGraphProps = {
   } | null>
   height?: number | string
   className?: string
+  /** ISO-8601 snapshot datetime — renders an amber dashed vertical line at this point */
+  snapshotDate?: string | null
 }
 
 export default function ObservationGraph({
@@ -57,6 +59,7 @@ export default function ObservationGraph({
   onDownloadAllDatastreams,
   className = '',
   height = '100%',
+  snapshotDate = null,
 }: ObservationGraphProps) {
   const { t } = useTranslation()
 
@@ -164,6 +167,7 @@ export default function ObservationGraph({
       primaryColor,
       t: (key: string) => t(key),
       onDownloadAllDatastreams,
+      snapshotDate,
     })
 
     chart.clear()
@@ -224,6 +228,7 @@ export default function ObservationGraph({
     loading,
     error,
     onDownloadAllDatastreams,
+    snapshotDate,
     t,
   ])
 

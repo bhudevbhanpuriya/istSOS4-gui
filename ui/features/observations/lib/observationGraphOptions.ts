@@ -16,6 +16,7 @@ export function buildObservationGraphOption({
   primaryColor,
   t,
   onDownloadAllDatastreams,
+  snapshotDate,
 }: {
   seriesEntries: GraphSeriesEntry[]
   activeDatastreamIds: string[]
@@ -25,6 +26,8 @@ export function buildObservationGraphOption({
     filename: string
     bytes: ArrayBuffer
   } | null>
+  /** ISO-8601 datetime — renders an amber dashed vertical line on the chart */
+  snapshotDate?: string | null
 }): echarts.EChartsOption {
   const tableBorderColor = withAlpha(primaryColor, 0.35)
   const tableHeaderBg = withAlpha(primaryColor, 0.12)
@@ -330,6 +333,27 @@ export function buildObservationGraphOption({
           color,
         },
         yAxisIndex: isSecondary ? 1 : 0,
+        // Amber dashed vertical line at the snapshot date — only in As-Of mode
+        markLine: snapshotDate
+          ? {
+              silent: true,
+              symbol: 'none',
+              data: [{ xAxis: new Date(snapshotDate).getTime() }],
+              lineStyle: {
+                color: '#f59e0b',
+                type: 'dashed' as const,
+                width: 2,
+              },
+              label: {
+                // Only label on the primary series to avoid duplicate text
+                show: isPrimary,
+                formatter: 'Snapshot',
+                position: 'insideStartTop' as const,
+                color: '#b45309',
+                fontSize: 11,
+              },
+            }
+          : undefined,
       }
     }),
   }

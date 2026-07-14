@@ -113,6 +113,10 @@ function ageLabel(endRaw?: string) {
 type Props = {
   thing: Thing | null
   observedPropertyNameFilter?: string | null
+  /** True when the app is in as_of snapshot mode */
+  isSnapshot?: boolean
+  /** The ISO snapshot datetime, shown in the read-only banner */
+  asOfDate?: string | null
   onClose: () => void
   onCreateDatastream?: () => void
   onOpenDetails?: (datastream: Datastream) => void
@@ -143,6 +147,8 @@ type DeletePreview = {
 export default function DatastreamTable({
   thing,
   observedPropertyNameFilter = null,
+  isSnapshot = false,
+  asOfDate = null,
   onClose,
   onCreateDatastream,
   onOpenDetails,
@@ -352,30 +358,34 @@ export default function DatastreamTable({
                   <ChartIcon size={18} />
                 </Button>
               </Tooltip>
-              <Tooltip color="primary" content={t('general.edit')}>
-                <Button
-                  isIconOnly
-                  className="h-6 w-6 min-w-6"
-                  size="sm"
-                  variant="light"
-                  color="primary"
-                  onPress={handleEdit}
-                >
-                  <EditIcon size={18} />
-                </Button>
-              </Tooltip>
-              <Tooltip color="danger" content={t('general.delete')}>
-                <Button
-                  isIconOnly
-                  className="h-6 w-6 min-w-6"
-                  size="sm"
-                  variant="light"
-                  color="danger"
-                  onPress={handleDelete}
-                >
-                  <DeleteIcon size={18} />
-                </Button>
-              </Tooltip>
+              {!isSnapshot && (
+                <>
+                  <Tooltip color="primary" content={t('general.edit')}>
+                    <Button
+                      isIconOnly
+                      className="h-6 w-6 min-w-6"
+                      size="sm"
+                      variant="light"
+                      color="primary"
+                      onPress={handleEdit}
+                    >
+                      <EditIcon size={18} />
+                    </Button>
+                  </Tooltip>
+                  <Tooltip color="danger" content={t('general.delete')}>
+                    <Button
+                      isIconOnly
+                      className="h-6 w-6 min-w-6"
+                      size="sm"
+                      variant="light"
+                      color="danger"
+                      onPress={handleDelete}
+                    >
+                      <DeleteIcon size={18} />
+                    </Button>
+                  </Tooltip>
+                </>
+              )}
             </div>
           )
 
@@ -406,6 +416,25 @@ export default function DatastreamTable({
         style={{ zIndex: 3000 }}
       >
         <Card className="h-[27vh] overflow-hidden rounded-none">
+          {isSnapshot && (
+            <div
+              className="flex items-center gap-2 px-3 py-1 text-xs font-medium"
+              style={{
+                background: 'linear-gradient(90deg, rgba(120,53,15,0.12) 0%, rgba(146,64,14,0.12) 100%)',
+                borderBottom: '1px solid rgba(251,191,36,0.25)',
+                color: '#b45309',
+              }}
+            >
+              <span>
+                ⚙ Snapshot mode — read-only — showing data as of{' '}
+                <span className="font-bold">
+                  {asOfDate
+                    ? dayjs.utc(asOfDate).format('MMM D, YYYY HH:mm') + ' UTC'
+                    : ''}
+                </span>
+              </span>
+            </div>
+          )}
           <TableComponent
           key={lang}
           items={datastreams}
@@ -430,47 +459,65 @@ export default function DatastreamTable({
           emptyContent={t('general.no_data')}
           topLeft={
             <div className="min-w-0 flex-1 p-1">
-              <div className="text-xs font-medium ">{thingName}</div>
+              <div className="flex items-center gap-2">
+                <span className="text-xs font-medium">{thingName}</span>
+                {isSnapshot && asOfDate && (
+                  <span
+                    className="rounded-full px-2 py-0.5 text-[10px] font-semibold"
+                    style={{
+                      background: 'rgba(59,130,246,0.15)',
+                      border: '1px solid rgba(59,130,246,0.4)',
+                      color: '#3b82f6',
+                    }}
+                  >
+                    {dayjs.utc(asOfDate).format('MMM D, YYYY')}
+                  </span>
+                )}
+              </div>
               <div className="text-[10px]">{networkLabel}</div>
             </div>
           }
           topRight={
             <div className="flex gap-2">
-              <Dropdown>
-                <DropdownTrigger>
-                  <Button
-                    endContent={<ChevronDownIcon size={18} />}
-                    size="sm"
-                    color="primary"
-                  >
-                    {t('general.new')}
-                  </Button>
-                </DropdownTrigger>
-                <DropdownMenu aria-label="Datastream actions" variant="light">
-                  <DropdownItem
-                    key="new-datastream"
-                    startContent={<LocationIcon size={16} />}
-                    onPress={onCreateDatastream}
-                  >
-                    {t('general.new')}
-                  </DropdownItem>
-                  <DropdownItem
-                    key="import-from-file"
-                    startContent={<ImportFileIcon size={16} />}
-                    onPress={() =>
-                      document
-                        .getElementById('datastream-import-trigger')
-                        ?.click()
-                    }
-                  >
-                    {t('import.actions.import_from_file')}
-                  </DropdownItem>
-                </DropdownMenu>
-              </Dropdown>
-              <ImportFromFileButton
-                buttonId="datastream-import-trigger"
-                className="hidden"
-              />
+              {!isSnapshot && (
+                <>
+                  <Dropdown>
+                    <DropdownTrigger>
+                      <Button
+                        endContent={<ChevronDownIcon size={18} />}
+                        size="sm"
+                        color="primary"
+                      >
+                        {t('general.new')}
+                      </Button>
+                    </DropdownTrigger>
+                    <DropdownMenu aria-label="Datastream actions" variant="light">
+                      <DropdownItem
+                        key="new-datastream"
+                        startContent={<LocationIcon size={16} />}
+                        onPress={onCreateDatastream}
+                      >
+                        {t('general.new')}
+                      </DropdownItem>
+                      <DropdownItem
+                        key="import-from-file"
+                        startContent={<ImportFileIcon size={16} />}
+                        onPress={() =>
+                          document
+                            .getElementById('datastream-import-trigger')
+                            ?.click()
+                        }
+                      >
+                        {t('import.actions.import_from_file')}
+                      </DropdownItem>
+                    </DropdownMenu>
+                  </Dropdown>
+                  <ImportFromFileButton
+                    buttonId="datastream-import-trigger"
+                    className="hidden"
+                  />
+                </>
+              )}
 
               <Tooltip content={t('general.close')}>
                 <Button

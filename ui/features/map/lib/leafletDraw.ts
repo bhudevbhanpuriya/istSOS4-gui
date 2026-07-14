@@ -14,6 +14,7 @@
 import {
   createClusterGroup,
   createThingMarkerIcon,
+  createThingMarkerDivIcon,
   showClusterHullPreview,
 } from './leafletCluster'
 import { Datastream, Thing } from '@/types/domain'
@@ -451,6 +452,8 @@ export function drawNetworkLayers(args: {
   sourceColorByKey?: Record<string, string>
 
   labels?: TooltipLabels
+  /** Formatted date label for snapshot mode (e.g. "Jun 26 · 01:16 UTC"). When set, Point markers get an amber pill. */
+  asOfLabel?: string | null
   onThingSelect?: (
     thing: Thing,
     selection?: { observedPropertyName?: string; datastreamId?: string }
@@ -474,6 +477,7 @@ export function drawNetworkLayers(args: {
     sourceColorByKey,
 
     labels,
+    asOfLabel,
     onThingSelect,
   } = args
 
@@ -786,7 +790,9 @@ export function drawNetworkLayers(args: {
       if (!ll) continue
 
       const m = L.marker(ll, {
-        icon: markerIconFor(base, borderColor),
+        icon: asOfLabel
+          ? createThingMarkerDivIcon(L, base, borderColor, asOfLabel)
+          : markerIconFor(base, borderColor),
       })
       ;(m as MarkerWithMeta).__freshnessStatus = freshnessStatus
 

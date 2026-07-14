@@ -54,11 +54,14 @@ import {
 export default function LeafletMap({
   things,
   selectedNetwork,
+  asOfLabel,
   onThingSelect,
   onCreateThingAt,
 }: {
   things: Thing[] | { value: Thing[] }
   selectedNetwork?: string
+  /** Formatted snapshot date label (e.g. "Jun 26 · 01:16 UTC"). When set, markers get amber date pills. */
+  asOfLabel?: string | null
   onThingSelect?: (
     thing: Thing,
     selection?: { observedPropertyName?: string; datastreamId?: string }
@@ -343,6 +346,7 @@ export default function LeafletMap({
         network: t('map.network'),
         things: t('map.things'),
       },
+      asOfLabel: asOfLabel ?? undefined,
       onThingSelect,
     })
   }
@@ -519,7 +523,7 @@ export default function LeafletMap({
 
   useEffect(() => {
     redraw()
-  }, [thingsArr, selectedNetwork, thingEnabled, sourceColorByKey])
+  }, [thingsArr, selectedNetwork, thingEnabled, sourceColorByKey, asOfLabel])
 
   useEffect(() => {
     redraw()
@@ -731,6 +735,7 @@ export default function LeafletMap({
             mapRef.current?.zoomOut?.()
             setContextMenu(null)
           }}
+          isSnapshot={Boolean(asOfLabel)}
         />
       ) : null}
 

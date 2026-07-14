@@ -14,16 +14,23 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 import DatastreamTable from '@/features/datastreams/components/DatastreamTable'
+import TimelineScrubber from '@/features/as-of/components/TimelineScrubber'
+import AsOfExistenceDialog from '@/features/as-of/components/AsOfExistenceDialog'
 import FormModal from '@/features/forms/components/FormModal'
 import ChartModal from '@/features/observations/components/ChartModal'
 import { Card } from '@heroui/card'
+import dayjs from 'dayjs'
+import utc from 'dayjs/plugin/utc'
 import dynamic from 'next/dynamic'
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
+
+dayjs.extend(utc)
 
 import { siteConfig } from '@/config/site'
 import { Datastream, Thing } from '@/types/domain'
 
 import { useAuth } from '@/context/AuthContext'
+import { useAsOf } from '@/context/AsOfContext'
 import {
   FormTabKey,
   buildDatastreamEditFormState,
@@ -32,6 +39,7 @@ import { CsvDownloadPayload, buildDatastreamWorkbookPayload } from './home/downl
 import { FormDataMap } from '@/features/forms/components/wizard/types'
 import { useDataSourcesSync } from './home/useDataSourcesSync'
 import { useChartState } from './home/useChartState'
+import { useAsOfThing, type ExistenceState } from '@/features/as-of/hooks/useAsOfThing'
 import {
   buildLocationsForForm,
   buildNetworksForForm,
@@ -79,6 +87,7 @@ export default function Home({
   selectedNetwork?: string
 }) {
   const { token } = useAuth()
+  const { asOfDate, isSnapshot } = useAsOf()
   const primaryEndpoint = useMemo(
     () => normalizeEndpoint(siteConfig.api_root),
     []
@@ -160,7 +169,29 @@ export default function Home({
   } = useChartState({
     localThings,
     token,
+    asOfDate,
   })
+
+  // Resolve the thing as it existed at asOfDate (mock for dummy data, stub for real)
+  const { snapshotThing, isLoading: snapshotLoading, existenceState, existenceRange } = useAsOfThing({
+    thing: selectedThing,
+    asOfDate,
+  })
+
+  // Track whether the user has explicitly dismissed the existence dialog
+  const [existenceDialogDismissed, setExistenceDialogDismissed] = useState(false)
+
+  // Track previous existenceState so we re-show the dialog only on a genuine
+  // transition from 'exists' into an invalid state — NOT on every scrubber tick
+  // while already inside the invalid zone (that would override the user's dismiss).
+  const prevExistenceStateRef = useRef<ExistenceState>(existenceState)
+  useEffect(() => {
+    const prev = prevExistenceStateRef.current
+    prevExistenceStateRef.current = existenceState
+    if (existenceState !== 'exists' && prev === 'exists') {
+      setExistenceDialogDismissed(false)
+    }
+  }, [existenceState])
 
   const downloadAllDatastreamsCsv = async (): Promise<CsvDownloadPayload | null> => {
     return buildDatastreamWorkbookPayload({
@@ -177,6 +208,11 @@ export default function Home({
         <LeafletMap
           things={localThings}
           selectedNetwork={selectedNetwork}
+          asOfLabel={
+            isSnapshot && asOfDate
+              ? dayjs.utc(asOfDate).format('MMM D \u00b7 HH:mm') + ' UTC'
+              : null
+          }
           onThingSelect={onMapThingSelect}
           onCreateThingAt={(point) => {
             setCreateFormState({
@@ -221,6 +257,8 @@ export default function Home({
           setIsChartOpen(false)
           resetChartState()
         }}
+        isSnapshot={isSnapshot}
+        asOfDate={asOfDate}
         things={localThings}
         thing={selectedThing}
         selectedObservedPropertyName={selectedObservedPropertyName}
@@ -255,13 +293,31 @@ export default function Home({
           applyObservationRange(null, null)
         }}
       />
+      {/* Timeline scrubber — only visible in snapshot mode with a thing selected */}
+      <TimelineScrubber thing={selectedThing} />
+
+      {/* Existence dialog — floating popup when asOfDate is outside the Thing's lifetime */}
+      {isSnapshot && existenceState !== 'exists' && selectedThing && !existenceDialogDismissed && (
+        <AsOfExistenceDialog
+          thingName={String(selectedThing.name ?? '')}
+          existenceState={existenceState}
+          existenceRange={existenceRange}
+          onDismiss={() => setExistenceDialogDismissed(true)}
+        />
+      )}
+
       {isPanelOpen && (
-        <div className="fixed inset-x-0 bottom-0 z-[4000] pb-[env(safe-area-inset-bottom)]">
+        <div
+          className="fixed inset-x-0 bottom-0 z-[4000] pb-[env(safe-area-inset-bottom)] transition-opacity duration-200"
+          style={{ opacity: snapshotLoading ? 0.5 : 1 }}
+        >
           <Card className="max-h-[38vh] overflow-hidden rounded-none">
             <div className="max-h-[32vh] overflow-auto pb-2">
               <DatastreamTable
-                thing={selectedThing}
+                thing={snapshotThing}
                 observedPropertyNameFilter={tableObservedPropertyFilter}
+                isSnapshot={isSnapshot}
+                asOfDate={asOfDate}
                 onClose={closePanel}
                 onCreateDatastream={() => {
                   setCreateFormState({

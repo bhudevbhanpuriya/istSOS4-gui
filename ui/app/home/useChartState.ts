@@ -20,9 +20,11 @@ function toErrorMessage(error: unknown, fallback: string) {
 export function useChartState({
   localThings,
   token,
+  asOfDate,
 }: {
   localThings: Thing[]
   token?: string | null
+  asOfDate?: string | null
 }) {
   const [selectedThingId, setSelectedThingId] = useState<string | null>(null)
   const [selectedObservedPropertyName, setSelectedObservedPropertyName] =
@@ -78,6 +80,8 @@ export function useChartState({
     setObsLoading(false)
     setObsStart(null)
     setObsEnd(null)
+    // Clear cache so snapshot results never bleed into live mode and vice versa
+    obsCacheRef.current.clear()
   }
 
   const closePanel = () => {
@@ -98,7 +102,18 @@ export function useChartState({
     const resolvedEndpoint =
       sourceEndpoint?.trim().replace(/\/+$/, '') ?? siteConfig.api_root
 
-    if (!startIso || !endIso) {
+    if (asOfDate) {
+      // Snapshot mode: default window is [asOfDate-7d, asOfDate]
+      const snapshotEnd = dayjs.utc(asOfDate)
+      // Hard-clamp: end must never exceed the snapshot date
+      if (!endIso || dayjs.utc(endIso).isAfter(snapshotEnd)) {
+        endIso = snapshotEnd.toISOString()
+      }
+      if (!startIso) {
+        startIso = snapshotEnd.subtract(7, 'day').toISOString()
+      }
+    } else if (!startIso || !endIso) {
+      // Live mode: default window is [lastObs-7d, lastObs]
       const [, endRaw] = phenomenonTime?.split('/') ?? []
       const end = endRaw ? dayjs.utc(endRaw) : dayjs.utc()
       const start = end.subtract(7, 'day')
@@ -106,7 +121,8 @@ export function useChartState({
       startIso = start.toISOString()
     }
 
-    const cacheKey = `${resolvedEndpoint}|${datastreamId}|${startIso}|${endIso}`
+    // Namespace cache key by asOfDate so snapshot/live results never collide
+    const cacheKey = `${resolvedEndpoint}|${datastreamId}|${startIso}|${endIso}|${asOfDate ?? 'live'}`
     const cached = obsCacheRef.current.get(cacheKey)
     if (cached) return { data: cached, startIso, endIso }
 
@@ -116,7 +132,8 @@ export function useChartState({
       datastreamId,
       startIso ?? undefined,
       endIso ?? undefined,
-      resolvedEndpoint
+      resolvedEndpoint,
+      asOfDate ?? null
     )
     obsCacheRef.current.set(cacheKey, observationData)
     return { data: observationData, startIso, endIso }

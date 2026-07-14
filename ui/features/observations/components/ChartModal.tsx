@@ -8,7 +8,11 @@ import {
   getLocalTimeZone,
   parseAbsoluteToLocal,
 } from '@internationalized/date'
+import dayjs from 'dayjs'
+import utc from 'dayjs/plugin/utc'
 import { useTranslation } from 'react-i18next'
+
+dayjs.extend(utc)
 
 import { CloseIcon } from '@/components/icons'
 import { Datastream, Observation, Thing } from '@/types/domain'
@@ -39,6 +43,10 @@ type ChartModalProps = {
   onActiveDatastreamsChange?: (datastreamIds: string[]) => void
   onThingKeysChange?: (thingKeys: string[]) => void
   onObservedPropertyNamesChange?: (observedPropertyNames: string[]) => void
+  /** True when the app is in As-Of snapshot mode */
+  isSnapshot?: boolean
+  /** ISO-8601 snapshot datetime — used to clamp the date picker and show the badge */
+  asOfDate?: string | null
 }
 
 type DateRangeChangeValue = {
@@ -79,6 +87,8 @@ export default function ChartModal({
   onActiveDatastreamsChange,
   onThingKeysChange,
   onObservedPropertyNamesChange,
+  isSnapshot = false,
+  asOfDate = null,
 }: ChartModalProps) {
   const { t } = useTranslation()
   const rangeValue = toRangeValue(start, end)
@@ -131,6 +141,22 @@ export default function ChartModal({
           <div className="min-w-0">
             <div className="truncate text-base font-semibold">Observations</div>
           </div>
+          {/* Snapshot badge — only visible in As-Of mode */}
+          {isSnapshot && asOfDate && (
+            <div
+              className="flex shrink-0 items-center gap-1.5 rounded px-2 py-0.5 text-xs font-medium"
+              style={{
+                background: 'rgba(251,191,36,0.15)',
+                border: '1px solid rgba(251,191,36,0.4)',
+                color: '#b45309',
+              }}
+            >
+              <span>⏱</span>
+              <span>
+                Snapshot — {dayjs.utc(asOfDate).format('MMM D, YYYY HH:mm')} UTC
+              </span>
+            </div>
+          )}
           <Button
             isIconOnly
             size="sm"
@@ -195,12 +221,17 @@ export default function ChartModal({
                 }
 
                 if (nextValue.start && nextValue.end) {
+                  let endIso = nextValue.end.toDate(timeZone).toISOString()
+                  // Safety clamp: in snapshot mode end must never exceed asOfDate
+                  if (asOfDate && endIso > asOfDate) endIso = asOfDate
                   onApplyRange?.(
                     nextValue.start.toDate(timeZone).toISOString(),
-                    nextValue.end.toDate(timeZone).toISOString()
+                    endIso
                   )
                 }
               }}
+              // Lock right bound to asOfDate in snapshot mode
+              maxValue={asOfDate ? parseAbsoluteToLocal(asOfDate) : undefined}
               variant="bordered"
               label={t('chart.time_range')}
               className="w-full"
@@ -225,6 +256,7 @@ export default function ChartModal({
                 loading={loading}
                 error={error}
                 onDownloadAllDatastreams={onDownloadAllDatastreams}
+                snapshotDate={asOfDate ?? undefined}
                 height="100%"
               />
             </div>

@@ -23,7 +23,8 @@ export async function getObservationsByDatastream(
   datastreamId: string,
   start?: string,
   end?: string,
-  apiRoot?: string
+  apiRoot?: string,
+  asOfDate?: string | null
 ) {
   const values: Observation[] = []
   const baseRoot = (apiRoot ?? siteConfig.api_root).trim().replace(/\/+$/, '')
@@ -35,6 +36,7 @@ export async function getObservationsByDatastream(
   let url =
     `${baseRoot}/Datastreams(${datastreamId})/Observations` +
     '?$orderby=phenomenonTime desc' +
+    (asOfDate ? `&$as_of=${encodeURIComponent(asOfDate)}` : '') +
     (filters.length ? `&$filter=${filters.join(' and ')}` : '') +
     '&$top=1440'
 

@@ -33,6 +33,8 @@ type Props = {
   onImportFromFile: () => void
   onZoomIn: () => void
   onZoomOut: () => void
+  /** Hides create/import actions — the map is read-only while viewing an As-Of snapshot */
+  isSnapshot?: boolean
 }
 
 function MenuRow({
@@ -66,6 +68,7 @@ export default function MapContextMenu({
   onImportFromFile,
   onZoomIn,
   onZoomOut,
+  isSnapshot = false,
 }: Props) {
   const { t } = useTranslation()
 
@@ -80,16 +83,20 @@ export default function MapContextMenu({
           label={t('general.center_map_here')}
           onClick={onCenterHere}
         />
-        <MenuRow
-          icon={<LocationIcon />}
-          label={t('general.new')}
-          onClick={onCreateThing}
-        />
-        <MenuRow
-          icon={<ImportFileIcon />}
-          label="Import from file"
-          onClick={onImportFromFile}
-        />
+        {!isSnapshot && (
+          <>
+            <MenuRow
+              icon={<LocationIcon />}
+              label={t('general.new')}
+              onClick={onCreateThing}
+            />
+            <MenuRow
+              icon={<ImportFileIcon />}
+              label="Import from file"
+              onClick={onImportFromFile}
+            />
+          </>
+        )}
 
         <div className="mx-3 my-1 border-t border-default-200" />
 
