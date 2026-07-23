@@ -43,6 +43,10 @@ type ObservationGraphProps = {
   className?: string
   /** ISO-8601 snapshot datetime — renders an amber dashed vertical line at this point */
   snapshotDate?: string | null
+  /** ISO-8601 window bounds — when set, pins the x-axis to exactly this range so
+   *  sparse/empty data still renders the full queried window (used in As-Of mode). */
+  windowStart?: string | null
+  windowEnd?: string | null
 }
 
 export default function ObservationGraph({
@@ -60,6 +64,8 @@ export default function ObservationGraph({
   className = '',
   height = '100%',
   snapshotDate = null,
+  windowStart = null,
+  windowEnd = null,
 }: ObservationGraphProps) {
   const { t } = useTranslation()
 
@@ -168,6 +174,8 @@ export default function ObservationGraph({
       t: (key: string) => t(key),
       onDownloadAllDatastreams,
       snapshotDate,
+      windowStart: windowStart ? new Date(windowStart).getTime() : null,
+      windowEnd: windowEnd ? new Date(windowEnd).getTime() : null,
     })
 
     chart.clear()
@@ -229,6 +237,8 @@ export default function ObservationGraph({
     error,
     onDownloadAllDatastreams,
     snapshotDate,
+    windowStart,
+    windowEnd,
     t,
   ])
 

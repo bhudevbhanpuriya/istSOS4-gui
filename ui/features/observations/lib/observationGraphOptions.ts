@@ -17,6 +17,8 @@ export function buildObservationGraphOption({
   t,
   onDownloadAllDatastreams,
   snapshotDate,
+  windowStart,
+  windowEnd,
 }: {
   seriesEntries: GraphSeriesEntry[]
   activeDatastreamIds: string[]
@@ -28,6 +30,11 @@ export function buildObservationGraphOption({
   } | null>
   /** ISO-8601 datetime — renders an amber dashed vertical line on the chart */
   snapshotDate?: string | null
+  /** Epoch ms — pins the x-axis to the queried window (e.g. the snapshot's
+   *  [as_of-7d, as_of]) so sparse/empty data still renders the full range and
+   *  the snapshot markLine can't stretch the axis. */
+  windowStart?: number | null
+  windowEnd?: number | null
 }): echarts.EChartsOption {
   const tableBorderColor = withAlpha(primaryColor, 0.35)
   const tableHeaderBg = withAlpha(primaryColor, 0.12)
@@ -257,6 +264,8 @@ export function buildObservationGraphOption({
     },
     xAxis: {
       type: 'time',
+      ...(windowStart != null ? { min: windowStart } : {}),
+      ...(windowEnd != null ? { max: windowEnd } : {}),
       minInterval: 60 * 60 * 1000,
       maxInterval: 60 * 60 * 1000,
       axisLine: {
@@ -333,27 +342,28 @@ export function buildObservationGraphOption({
           color,
         },
         yAxisIndex: isSecondary ? 1 : 0,
-        // Amber dashed vertical line at the snapshot date — only in As-Of mode
-        markLine: snapshotDate
-          ? {
-              silent: true,
-              symbol: 'none',
-              data: [{ xAxis: new Date(snapshotDate).getTime() }],
-              lineStyle: {
-                color: '#f59e0b',
-                type: 'dashed' as const,
-                width: 2,
-              },
-              label: {
-                // Only label on the primary series to avoid duplicate text
-                show: isPrimary,
-                formatter: 'Snapshot',
-                position: 'insideStartTop' as const,
-                color: '#b45309',
-                fontSize: 11,
-              },
-            }
-          : undefined,
+        // Amber dashed vertical line at the snapshot date — only in As-Of mode,
+        // drawn once on the primary series (avoids N overlapping lines/labels).
+        markLine:
+          snapshotDate && isPrimary
+            ? {
+                silent: true,
+                symbol: 'none',
+                data: [{ xAxis: new Date(snapshotDate).getTime() }],
+                lineStyle: {
+                  color: '#f59e0b',
+                  type: 'dashed' as const,
+                  width: 2,
+                },
+                label: {
+                  show: true,
+                  formatter: 'Snapshot',
+                  position: 'insideStartTop' as const,
+                  color: '#b45309',
+                  fontSize: 11,
+                },
+              }
+            : undefined,
       }
     }),
   }

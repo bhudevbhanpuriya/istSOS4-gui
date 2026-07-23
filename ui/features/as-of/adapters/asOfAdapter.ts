@@ -267,6 +267,66 @@ type BackendCommit = {
   actionType: string
 }
 
+/**
+ * Fetch a Thing's commit history (transaction-time events). Prefers the plural
+ * `/Commits` collection (full history) and falls back to the singular `/Commit`
+ * (creation commit only) on backends that don't expose the collection.
+ */
+async function fetchThingCommits(
+  endpoint: string,
+  id: string
+): Promise<BackendCommit[]> {
+  const pluralUrl = `${endpoint}/Things(${id})/Commits?$select=@iot.id,message,date,actionType`
+  try {
+    const res = await fetch(pluralUrl, {
+      headers: buildHeaders(endpoint),
+      cache: 'no-store',
+    })
+    if (res.ok) {
+      const data = await res.json()
+      if (Array.isArray(data?.value)) return data.value as BackendCommit[]
+    }
+  } catch {
+    // Ignore and try the singular endpoint below.
+  }
+
+  const singularUrl = `${endpoint}/Things(${id})/Commit`
+  try {
+    const res = await fetch(singularUrl, {
+      headers: buildHeaders(endpoint),
+      cache: 'no-store',
+    })
+    if (!res.ok) return []
+    const data = await res.json()
+    if (Array.isArray(data?.value)) return data.value as BackendCommit[]
+    if (data?.['@iot.id'] != null) return [data as BackendCommit]
+    return []
+  } catch {
+    return []
+  }
+}
+
+/**
+ * Derive a Thing's existence range from its COMMIT history — i.e. transaction
+ * time, which is the axis `$as_of` filters on. This is the correct source for
+ * "not-yet-created vs deleted", unlike phenomenonTime (when measurements were
+ * taken), which can be years off from when the row was actually written.
+ */
+function existenceRangeFromCommits(commits: BackendCommit[]): {
+  createdAt: string | null
+  deletedAt: string | null
+} {
+  if (commits.length === 0) return { createdAt: null, deletedAt: null }
+  const sorted = [...commits].sort(
+    (a, b) => dayjs.utc(a.date).valueOf() - dayjs.utc(b.date).valueOf()
+  )
+  const createdAt = sorted[0]?.date ?? null
+  const deleteCommit = [...sorted]
+    .reverse()
+    .find((c) => String(c.actionType).toUpperCase() === 'DELETE')
+  return { createdAt, deletedAt: deleteCommit?.date ?? null }
+}
+
 const apiAdapter: AsOfAdapter = {
   async resolveThing(thing, asOfDate) {
     const id = thingId(thing)
@@ -290,15 +350,20 @@ const apiAdapter: AsOfAdapter = {
 
       if (res.status === 404) {
         // The backend returns 404 when the thing didn't exist at that time.
-        // Infer a rough existence range from the live thing's datastreams so
-        // we can show "not-yet-created" vs "deleted" in the UI.
-        const existenceRange = inferExistenceRange(thing)
+        // Determine "not-yet-created vs deleted" from the COMMIT history
+        // (transaction time — the axis $as_of filters on), NOT phenomenonTime.
+        // Falls back to phenomenonTime only when no commit history is available.
+        const commits = await fetchThingCommits(endpoint, id)
+        const existenceRange =
+          commits.length > 0
+            ? existenceRangeFromCommits(commits)
+            : inferExistenceRange(thing)
         const target = dayjs.utc(asOfDate)
-        const earliest = existenceRange.createdAt
+        const createdAt = existenceRange.createdAt
           ? dayjs.utc(existenceRange.createdAt)
           : null
         const existenceState: ExistenceState =
-          earliest && target.isBefore(earliest) ? 'not-yet-created' : 'deleted'
+          createdAt && target.isBefore(createdAt) ? 'not-yet-created' : 'deleted'
         return { thing: { ...thing, Datastreams: [] }, existenceState, existenceRange }
       }
 
@@ -325,31 +390,21 @@ const apiAdapter: AsOfAdapter = {
     const endpoint = (thing.__sourceEndpoint ?? '').replace(/\/$/, '')
     if (!endpoint) return []
 
-    // GET /Things(id)/Commit returns a single commit (the creation commit).
-    // For a full history, we would need a separate "history" endpoint.
-    // For now we fetch the single associated commit; when the backend adds
-    // a /Things(id)/Commits (plural) collection endpoint we can update here.
-    const url = `${endpoint}/Things(${id})/Commit`
-
-    try {
-      const res = await fetch(url, {
-        headers: buildHeaders(endpoint),
-        cache: 'no-store',
-      })
-      if (!res.ok) return []
-
-      const data: BackendCommit = await res.json()
-      return [
-        {
-          id: String(data['@iot.id']),
-          // Backend field is `date`, our type uses `authoredAt`
-          authoredAt: data.date,
-          message: data.message,
-        },
-      ]
-    } catch {
-      return []
-    }
+    // Full history via the plural /Commits collection (falls back to the
+    // singular creation commit on older backends). Mapped oldest → newest so
+    // the scrubber can place a tick per commit.
+    const commits = await fetchThingCommits(endpoint, id)
+    return commits
+      .filter((commit) => !!commit?.date)
+      .map((commit) => ({
+        id: String(commit['@iot.id']),
+        // Backend field is `date`, our type uses `authoredAt`
+        authoredAt: commit.date,
+        message: commit.message,
+      }))
+      .sort(
+        (a, b) => dayjs.utc(a.authoredAt).valueOf() - dayjs.utc(b.authoredAt).valueOf()
+      )
   },
 }
 

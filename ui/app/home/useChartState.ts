@@ -1,6 +1,6 @@
 import dayjs from 'dayjs'
 import utc from 'dayjs/plugin/utc'
-import { useMemo, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 
 import { siteConfig } from '@/config/site'
 import { getDataSourceToken } from '@/lib/dataSourceTokens'
@@ -49,6 +49,13 @@ export function useChartState({
   const [obsStart, setObsStart] = useState<string | null>(null)
   const [obsEnd, setObsEnd] = useState<string | null>(null)
   const obsCacheRef = useRef<Map<string, Observation[]>>(new Map())
+  // Tracks the asOfDate context that obsStart/obsEnd + cache belong to, so a
+  // range left over from a different snapshot (or from live mode) is never
+  // reused when the snapshot context changes.
+  const prevAsOfRef = useRef(asOfDate)
+  // Trailing-edge timer for the open-chart refetch (keeps continuous scrubber
+  // dragging from firing a network request on every tick).
+  const refetchTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const [observations, setObservations] = useState<Observation[]>([])
   const [comparisonObservations, setComparisonObservations] = useState<
     Observation[]
@@ -80,6 +87,11 @@ export function useChartState({
     setObsLoading(false)
     setObsStart(null)
     setObsEnd(null)
+    // Cancel any pending trailing-edge refetch so it can't fire after close
+    if (refetchTimerRef.current) {
+      clearTimeout(refetchTimerRef.current)
+      refetchTimerRef.current = null
+    }
     // Clear cache so snapshot results never bleed into live mode and vice versa
     obsCacheRef.current.clear()
   }
@@ -103,7 +115,11 @@ export function useChartState({
       sourceEndpoint?.trim().replace(/\/+$/, '') ?? siteConfig.api_root
 
     if (asOfDate) {
-      // Snapshot mode: default window is [asOfDate-7d, asOfDate]
+      // Snapshot mode: default window is strictly [asOfDate-7d, asOfDate].
+      // Stale cross-context ranges are handled by the asOfDate reset effect, so
+      // we do NOT discard out-of-window ranges here — the user must stay free to
+      // pan the date picker to wherever the data actually is (e.g. older data
+      // that existed as of the snapshot).
       const snapshotEnd = dayjs.utc(asOfDate)
       // Hard-clamp: end must never exceed the snapshot date
       if (!endIso || dayjs.utc(endIso).isAfter(snapshotEnd)) {
@@ -229,7 +245,14 @@ export function useChartState({
   const openChartForThingAndObservedProperties = async (
     thingKeys: string[],
     observedPropertyNames: string[],
-    preferredDatastreamId?: string
+    preferredDatastreamId?: string,
+    // When provided, overrides the current obsStart/obsEnd for the fetch — used
+    // by the asOfDate effect to force a fresh default window (null range) on the
+    // whole selection instead of reusing a range from the previous snapshot.
+    rangeOverride?: { start?: string | null; end?: string | null },
+    // When provided, keeps this active datastream selection instead of
+    // collapsing to the primary (preserves comparisons across snapshot changes).
+    activeIdsOverride?: string[]
   ) => {
     setIsChartOpen(true)
     const keys = Array.from(new Set(thingKeys)).filter(Boolean)
@@ -265,13 +288,27 @@ export function useChartState({
         : null) ??
       datastreamCandidates[0] ??
       null
+    // Preserve an existing active selection (e.g. a two-datastream comparison)
+    // when the caller passes one — used by the asOfDate refetch so moving the
+    // snapshot re-fetches every series without collapsing back to the primary.
+    const overrideActiveIds = (activeIdsOverride ?? [])
+      .map((id) => String(id).trim())
+      .filter(Boolean)
+    const findCandidateById = (id: string) =>
+      datastreamCandidates.find(
+        (ds) => String(ds?.['@iot.id'] ?? ds?.id ?? '').trim() === id
+      ) ?? null
+    const secondaryDatastream =
+      overrideActiveIds[1] ? findCandidateById(overrideActiveIds[1]) : null
     setSelectedDatastream(primaryDatastream)
-    setComparisonDatastream(null)
+    setComparisonDatastream(secondaryDatastream)
     setComparisonObservations([])
     setActiveDatastreamIds(
-      primaryDatastream
-        ? [String(primaryDatastream?.['@iot.id'] ?? primaryDatastream?.id ?? '')]
-        : []
+      overrideActiveIds.length
+        ? overrideActiveIds
+        : primaryDatastream
+          ? [String(primaryDatastream?.['@iot.id'] ?? primaryDatastream?.id ?? '')]
+          : []
     )
 
     const nextSeries: Array<{
@@ -293,7 +330,7 @@ export function useChartState({
       const result = await fetchObservations(
         dsId,
         ds?.phenomenonTime,
-        { start: obsStart, end: obsEnd },
+        rangeOverride ?? { start: obsStart, end: obsEnd },
         sourceEndpoint
       )
       nextSeries.push({ datastream: ds, observations: result.data })
@@ -445,6 +482,56 @@ export function useChartState({
     setComparisonObservations([])
     setObsError(null)
   }
+
+  // When the snapshot context (asOfDate) changes, the persisted chart range and
+  // cache belong to the *old* context and must not be reused. Re-anchor the
+  // range to the new default window immediately, and — only if a chart is open —
+  // refetch its data on the trailing edge so continuous scrubber dragging does
+  // not fire a request per tick.
+  useEffect(() => {
+    if (prevAsOfRef.current === asOfDate) return
+    prevAsOfRef.current = asOfDate
+
+    // Stale results must never bleed across snapshot (or live) contexts
+    obsCacheRef.current.clear()
+
+    // Fresh default window: [asOfDate-7d, asOfDate] in snapshot mode; in live
+    // mode leave it empty so the phenomenonTime-based default takes over.
+    const [nextStart, nextEnd] = asOfDate
+      ? [
+          dayjs.utc(asOfDate).subtract(7, 'day').toISOString(),
+          dayjs.utc(asOfDate).toISOString(),
+        ]
+      : [null, null]
+
+    // Re-anchor the displayed range right away (fixes the stale "Time range")
+    setObsStart(nextStart)
+    setObsEnd(nextEnd)
+
+    if (isChartOpen && selectedDatastream) {
+      refetchTimerRef.current = setTimeout(() => {
+        // Refetch the WHOLE current selection (all things / observed properties)
+        // with a fresh null range, so every series re-anchors to the new
+        // snapshot window — not just the primary datastream.
+        void openChartForThingAndObservedProperties(
+          selectedThingKeysForChart,
+          selectedObservedPropertyNamesForChart,
+          activeDatastreamIds[0],
+          { start: null, end: null },
+          activeDatastreamIds
+        )
+      }, 300)
+    }
+
+    return () => {
+      if (refetchTimerRef.current) {
+        clearTimeout(refetchTimerRef.current)
+        refetchTimerRef.current = null
+      }
+    }
+    // Only react to asOfDate; other values are read from the current closure.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [asOfDate])
 
   return {
     selectedThing,

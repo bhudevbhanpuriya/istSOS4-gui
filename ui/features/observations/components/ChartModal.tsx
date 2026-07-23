@@ -63,6 +63,33 @@ function toRangeValue(start?: string | null, end?: string | null) {
   }
 }
 
+/**
+ * Builds a human-readable reason for why the snapshot window is empty, using the
+ * datastream's own phenomenonTime extent ("isoStart/isoEnd"). Purely
+ * informational — it never changes the as-of state, it just tells the user where
+ * the data actually is relative to the [as_of-7d, as_of] window they're viewing.
+ */
+function describeSnapshotGap(
+  datastream: Datastream | null,
+  start?: string | null,
+  end?: string | null
+): string {
+  const fmt = (d: dayjs.Dayjs) => d.utc().format('MMM D, YYYY')
+  const [dataStartIso, dataEndIso] = String(datastream?.phenomenonTime ?? '').split('/')
+  const dataStart = dataStartIso ? dayjs.utc(dataStartIso) : null
+  const dataEnd = dataEndIso ? dayjs.utc(dataEndIso) : null
+  const winStart = start ? dayjs.utc(start) : null
+  const winEnd = end ? dayjs.utc(end) : null
+
+  if (dataEnd && winStart && dataEnd.isBefore(winStart)) {
+    return `No data in this window — this datastream's measurements end ${fmt(dataEnd)}, before the selected range. Pan the date picker back to view them.`
+  }
+  if (dataStart && winEnd && dataStart.isAfter(winEnd)) {
+    return `No data in this window — this datastream's measurements start ${fmt(dataStart)}, after the selected range.`
+  }
+  return 'No observations were recorded in this snapshot window.'
+}
+
 export default function ChartModal({
   isOpen,
   onClose,
@@ -93,6 +120,15 @@ export default function ChartModal({
   const { t } = useTranslation()
   const rangeValue = toRangeValue(start, end)
   const timeZone = getLocalTimeZone()
+  // Snapshot-mode empty-window notice: informational only, never mutates as-of.
+  const hasData =
+    observations.length > 0 ||
+    allSeries.some((series) => series.observations.length > 0)
+  const showSnapshotNoData =
+    isSnapshot && !loading && !error && !!datastream && !hasData
+  const snapshotNoDataMessage = showSnapshotNoData
+    ? describeSnapshotGap(datastream, start, end)
+    : null
   const thingOptions = things.map((entry) => {
     const key = `${String(entry?.__sourceId ?? entry?.__sourceEndpoint ?? '0')}::${String(
       entry?.['@iot.id'] ?? entry?.id ?? entry?.name ?? ''
@@ -243,6 +279,20 @@ export default function ChartModal({
               size="sm"
             />
             </div>
+            {snapshotNoDataMessage && (
+              <div
+                className="mb-2 flex shrink-0 items-start gap-2 rounded px-3 py-2 text-xs"
+                role="status"
+                style={{
+                  background: 'rgba(251,191,36,0.12)',
+                  border: '1px solid rgba(251,191,36,0.4)',
+                  color: '#b45309',
+                }}
+              >
+                <span aria-hidden>⚠</span>
+                <span>{snapshotNoDataMessage}</span>
+              </div>
+            )}
             <div className="min-h-0 flex-1">
               <ObservationGraph
                 thing={thing}
@@ -257,6 +307,8 @@ export default function ChartModal({
                 error={error}
                 onDownloadAllDatastreams={onDownloadAllDatastreams}
                 snapshotDate={asOfDate ?? undefined}
+                windowStart={isSnapshot ? start : null}
+                windowEnd={isSnapshot ? end : null}
                 height="100%"
               />
             </div>
