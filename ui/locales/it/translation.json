@@ -301,5 +301,77 @@
       "observed_properties": "Observed Properties",
       "datastreams": "Datastreams"
     }
+  },
+  "as_of": {
+    "banner": {
+      "snapshot_active": "Modalità snapshot attiva — dati visualizzati alla data"
+    },
+    "navbar": {
+      "live": "Live",
+      "exit_snapshot": "Esci dalla modalità snapshot",
+      "open_picker": "Apri il selettore temporale"
+    },
+    "picker": {
+      "title": "Visualizza snapshot storico",
+      "subtitle": "Seleziona una data — l'orario predefinito è 00:00",
+      "preview": "{{date}} alle {{time}} (locale)",
+      "clear_exit": "Azzera ed esci",
+      "quick_times": "Tempi rapidi",
+      "future_title": "Data futura selezionata",
+      "future_detail": "Il viaggio nel tempo funziona solo con date passate. Seleziona una data e un'ora nel passato.",
+      "future_cell": "Non è possibile spostarsi a una data futura",
+      "previous": "Precedente",
+      "next": "Successivo"
+    },
+    "quick_times": {
+      "last_5_minutes": "Ultimi 5 minuti",
+      "last_10_minutes": "Ultimi 10 minuti",
+      "last_30_minutes": "Ultimi 30 minuti",
+      "last_1_hour": "Ultima ora",
+      "last_3_hours": "Ultime 3 ore",
+      "last_6_hours": "Ultime 6 ore",
+      "last_1_day": "Ultimo giorno",
+      "last_1_week": "Ultima settimana"
+    },
+    "calendar": {
+      "day_su": "Do",
+      "day_mo": "Lu",
+      "day_tu": "Ma",
+      "day_we": "Me",
+      "day_th": "Gi",
+      "day_fr": "Ve",
+      "day_sa": "Sa",
+      "month_1": "Gennaio",
+      "month_2": "Febbraio",
+      "month_3": "Marzo",
+      "month_4": "Aprile",
+      "month_5": "Maggio",
+      "month_6": "Giugno",
+      "month_7": "Luglio",
+      "month_8": "Agosto",
+      "month_9": "Settembre",
+      "month_10": "Ottobre",
+      "month_11": "Novembre",
+      "month_12": "Dicembre"
+    },
+    "scrubber": {
+      "title": "Cronologia",
+      "commits_count_one": "{{count}} commit",
+      "commits_count_other": "{{count}} commit",
+      "no_history": "nessuna cronologia",
+      "now": "Ora",
+      "before_range": "La data precede l'intervallo navigabile",
+      "after_range": "La data supera l'intervallo navigabile",
+      "aria_label": "Cursore temporale"
+    },
+    "existence": {
+      "no_data_before": "Nessun dato prima di questa data",
+      "no_data_after": "Nessun dato dopo questa data",
+      "detail_before": "\"{{name}}\" non ha dati prima del {{date}}.",
+      "detail_after": "\"{{name}}\" non ha dati dopo il {{date}}.",
+      "jump_earliest": "Vai al dato più vecchio",
+      "jump_latest": "Vai al dato più recente",
+      "dismiss": "Chiudi"
+    }
   }
 }

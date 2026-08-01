@@ -17,6 +17,7 @@
 import dayjs from 'dayjs'
 import utc from 'dayjs/plugin/utc'
 import { useCallback, useMemo, useRef } from 'react'
+import { useTranslation } from 'react-i18next'
 
 import { useAsOf } from '@/context/AsOfContext'
 import { useAsOfCommits, type AsOfCommit } from '@/features/as-of/hooks/useAsOfCommits'
@@ -133,6 +134,7 @@ function CommitTick({
  */
 export default function TimelineScrubber({ thing }: { thing: Thing | null }) {
   const { asOfDate, setAsOfDate, isSnapshot } = useAsOf()
+  const { t } = useTranslation()
   const { commits, firstDate, lastDate } = useAsOfCommits({ thing })
 
   const trackRef = useRef<HTMLDivElement>(null)
@@ -184,7 +186,7 @@ export default function TimelineScrubber({ thing }: { thing: Thing | null }) {
 
   const displayDate = asOfDate
     ? dayjs.utc(asOfDate).format('MMM D, YYYY · HH:mm') + ' UTC'
-    : 'Now'
+    : t('as_of.scrubber.now')
 
   return (
     <div
@@ -210,7 +212,7 @@ export default function TimelineScrubber({ thing }: { thing: Thing | null }) {
                 textTransform: 'uppercase',
               }}
             >
-              ⏱ Timeline
+              ⏱ {t('as_of.scrubber.title')}
             </span>
             <span
               style={{
@@ -219,8 +221,8 @@ export default function TimelineScrubber({ thing }: { thing: Thing | null }) {
               }}
             >
               {commits.length > 0
-                ? `${commits.length} commit${commits.length !== 1 ? 's' : ''}`
-                : 'no history'}
+                ? t('as_of.scrubber.commits_count', { count: commits.length })
+                : t('as_of.scrubber.no_history')}
             </span>
           </div>
 
@@ -241,10 +243,10 @@ export default function TimelineScrubber({ thing }: { thing: Thing | null }) {
           >
             {/* Directional arrow shows the thumb is pinned at a range edge */}
             {isBeforeRange && (
-              <span title="Date is before the navigable range" style={{ fontSize: '9px', opacity: 0.8 }}>↓</span>
+              <span title={t('as_of.scrubber.before_range')} style={{ fontSize: '9px', opacity: 0.8 }}>↓</span>
             )}
             {isAfterRange && (
-              <span title="Date is after the navigable range" style={{ fontSize: '9px', opacity: 0.8 }}>↑</span>
+              <span title={t('as_of.scrubber.after_range')} style={{ fontSize: '9px', opacity: 0.8 }}>↑</span>
             )}
             {displayDate}
           </span>
@@ -303,7 +305,7 @@ export default function TimelineScrubber({ thing }: { thing: Thing | null }) {
                   transform: 'translateX(-50%)',
                 }}
               >
-                Now
+                {t('as_of.scrubber.now')}
               </span>
             </div>
           </div>
@@ -317,7 +319,7 @@ export default function TimelineScrubber({ thing }: { thing: Thing | null }) {
               step={60_000}          // 1-minute steps
               value={currentMs}
               onChange={handleRangeChange}
-              aria-label="Time travel scrubber"
+              aria-label={t('as_of.scrubber.aria_label')}
               style={{
                 // Full-width amber-themed range input
                 width: '100%',

@@ -17,6 +17,7 @@
 import dayjs from 'dayjs'
 import utc from 'dayjs/plugin/utc'
 import { Button } from '@heroui/button'
+import { useTranslation } from 'react-i18next'
 
 import { useAsOf } from '@/context/AsOfContext'
 import type { ExistenceState } from '@/features/as-of/hooks/useAsOfThing'
@@ -51,7 +52,8 @@ export default function AsOfExistenceDialog({
 }: Props) {
   // Stateless — parent (Home.tsx) fully controls whether this mounts.
   // Do not add internal visible state here; it creates duplicate logic.
-  const { asOfDate, setAsOfDate } = useAsOf()
+  const { setAsOfDate } = useAsOf()
+  const { t } = useTranslation()
 
   if (existenceState === 'exists') return null
 
@@ -66,11 +68,15 @@ export default function AsOfExistenceDialog({
     : null
   const jumpTarget = isNotYet ? existenceRange.createdAt : safeDeletedAt
 
-  const headline = isNotYet ? 'No data before this date' : 'No data after this date'
+  const headline = isNotYet
+    ? t('as_of.existence.no_data_before')
+    : t('as_of.existence.no_data_after')
   const detail = isNotYet
-    ? `"${thingName}" has no data before ${fmt(existenceRange.createdAt)}.`
-    : `"${thingName}" has no data after ${fmt(existenceRange.deletedAt)}.`
-  const jumpLabel = isNotYet ? 'Jump to earliest data' : 'Jump to latest data'
+    ? t('as_of.existence.detail_before', { name: thingName, date: fmt(existenceRange.createdAt) })
+    : t('as_of.existence.detail_after', { name: thingName, date: fmt(existenceRange.deletedAt) })
+  const jumpLabel = isNotYet
+    ? t('as_of.existence.jump_earliest')
+    : t('as_of.existence.jump_latest')
 
   // Amber for "not yet", muted red for "deleted" — matching scrubber dead-zone
   const accentColor = isNotYet ? '#b45309' : '#be123c'
@@ -152,7 +158,7 @@ export default function AsOfExistenceDialog({
             {/* ✕ close */}
             <button
               onClick={onDismiss}
-              aria-label="Dismiss"
+              aria-label={t('as_of.existence.dismiss')}
               style={{
                 flexShrink: 0,
                 background: 'none',
@@ -184,7 +190,7 @@ export default function AsOfExistenceDialog({
               onPress={onDismiss}
               style={{ color: '#64748b', fontSize: 11 }}
             >
-              Dismiss
+              {t('as_of.existence.dismiss')}
             </Button>
             {jumpTarget && (
               <Button

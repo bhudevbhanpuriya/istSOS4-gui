@@ -18,30 +18,30 @@ import { Button } from '@heroui/button'
 import dayjs from 'dayjs'
 import utc from 'dayjs/plugin/utc'
 import { useEffect, useRef, useState } from 'react'
+import { useTranslation } from 'react-i18next'
 
 import { useAsOf } from '@/context/AsOfContext'
 
 dayjs.extend(utc)
 
 // ---------------------------------------------------------------------------
-// Quick-time preset definitions
+// Quick-time preset definitions — `key` resolves under as_of.quick_times.*
 // ---------------------------------------------------------------------------
 const QUICK_PRESETS = [
-  { label: 'Last 5 minutes', offsetMs: 5 * 60 * 1000 },
-  { label: 'Last 10 minutes', offsetMs: 10 * 60 * 1000 },
-  { label: 'Last 30 minutes', offsetMs: 30 * 60 * 1000 },
-  { label: 'Last 1 hour', offsetMs: 60 * 60 * 1000 },
-  { label: 'Last 3 hours', offsetMs: 3 * 60 * 60 * 1000 },
-  { label: 'Last 6 hours', offsetMs: 6 * 60 * 60 * 1000 },
-  { label: 'Last 1 day', offsetMs: 24 * 60 * 60 * 1000 },
-  { label: 'Last 1 week', offsetMs: 7 * 24 * 60 * 60 * 1000 },
+  { key: 'last_5_minutes', offsetMs: 5 * 60 * 1000 },
+  { key: 'last_10_minutes', offsetMs: 10 * 60 * 1000 },
+  { key: 'last_30_minutes', offsetMs: 30 * 60 * 1000 },
+  { key: 'last_1_hour', offsetMs: 60 * 60 * 1000 },
+  { key: 'last_3_hours', offsetMs: 3 * 60 * 60 * 1000 },
+  { key: 'last_6_hours', offsetMs: 6 * 60 * 60 * 1000 },
+  { key: 'last_1_day', offsetMs: 24 * 60 * 60 * 1000 },
+  { key: 'last_1_week', offsetMs: 7 * 24 * 60 * 60 * 1000 },
 ] as const
 
-const DAYS = ['Su', 'Mo', 'Tu', 'We', 'Th', 'Fr', 'Sa']
-const MONTHS = [
-  'January', 'February', 'March', 'April', 'May', 'June',
-  'July', 'August', 'September', 'October', 'November', 'December',
-]
+// Calendar labels are resolved through i18n rather than dayjs locale data, so
+// the picker stays translated regardless of the active dayjs locale.
+const DAY_KEYS = ['day_su', 'day_mo', 'day_tu', 'day_we', 'day_th', 'day_fr', 'day_sa']
+const MONTH_KEYS = Array.from({ length: 12 }, (_, i) => `month_${i + 1}`)
 
 // ---------------------------------------------------------------------------
 // Inline Mini-Calendar component
@@ -53,6 +53,7 @@ type CalendarProps = {
 }
 
 function InlineCalendar({ selectedDate, onSelect }: CalendarProps) {
+  const { t } = useTranslation()
   const today = dayjs()
 
   // Calendar cursor — the month/year we're currently viewing
@@ -92,7 +93,7 @@ function InlineCalendar({ selectedDate, onSelect }: CalendarProps) {
       ? `${yearRangeStart} – ${yearRangeStart + 11}`
       : viewMode === 'months'
         ? cursor.format('YYYY')
-        : cursor.format('MMMM YYYY')
+        : `${t(`as_of.calendar.${MONTH_KEYS[cursor.month()]}`)} ${cursor.format('YYYY')}`
 
   const handleHeaderClick = () => {
     if (viewMode === 'days') setViewMode('months')
@@ -154,7 +155,7 @@ function InlineCalendar({ selectedDate, onSelect }: CalendarProps) {
             ((e.currentTarget as HTMLButtonElement).style.background =
               'transparent')
           }
-          aria-label="Previous"
+          aria-label={t('as_of.picker.previous')}
         >
           ‹
         </button>
@@ -195,7 +196,7 @@ function InlineCalendar({ selectedDate, onSelect }: CalendarProps) {
             ((e.currentTarget as HTMLButtonElement).style.background =
               'transparent')
           }
-          aria-label="Next"
+          aria-label={t('as_of.picker.next')}
         >
           ›
         </button>
@@ -212,7 +213,7 @@ function InlineCalendar({ selectedDate, onSelect }: CalendarProps) {
               marginBottom: 4,
             }}
           >
-            {DAYS.map((d) => (
+            {DAY_KEYS.map((d) => (
               <div
                 key={d}
                 style={{
@@ -223,7 +224,7 @@ function InlineCalendar({ selectedDate, onSelect }: CalendarProps) {
                   paddingBottom: 2,
                 }}
               >
-                {d}
+                {t(`as_of.calendar.${d}`)}
               </div>
             ))}
           </div>
@@ -244,7 +245,7 @@ function InlineCalendar({ selectedDate, onSelect }: CalendarProps) {
                 <button
                   key={i}
                   onClick={() => onSelect(cell)}
-                  title={isFuture ? 'Cannot travel to a future date' : undefined}
+                  title={isFuture ? t('as_of.picker.future_cell') : undefined}
                   style={{
                     border: 'none',
                     borderRadius: 6,
@@ -293,11 +294,11 @@ function InlineCalendar({ selectedDate, onSelect }: CalendarProps) {
       {/* ── Month picker view ─────────────────────────────────────── */}
       {viewMode === 'months' && (
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 4 }}>
-          {MONTHS.map((name, idx) => {
+          {MONTH_KEYS.map((monthKey, idx) => {
             const isCurrent = idx === cursor.month()
             return (
               <button
-                key={name}
+                key={monthKey}
                 onClick={() => selectMonth(idx)}
                 style={{
                   border: 'none',
@@ -323,7 +324,7 @@ function InlineCalendar({ selectedDate, onSelect }: CalendarProps) {
                       'transparent'
                 }}
               >
-                {name.slice(0, 3)}
+                {t(`as_of.calendar.${monthKey}`).slice(0, 3)}
               </button>
             )
           })}
@@ -384,6 +385,7 @@ type Props = {
 
 export default function AsOfDropdown({ isOpen, onClose }: Props) {
   const { asOfDate, setAsOfDate, clearSnapshot } = useAsOf()
+  const { t } = useTranslation()
 
   // Selected calendar date (day only) and time string "HH:mm"
   const [selectedDay, setSelectedDay] = useState<dayjs.Dayjs | null>(null)
@@ -455,7 +457,10 @@ export default function AsOfDropdown({ isOpen, onClose }: Props) {
 
   // Human-readable preview of what will be applied
   const preview = selectedDay && !isFutureDateTime
-    ? selectedDay.format('MMM D, YYYY') + ' at ' + timeValue + ' (local)'
+    ? t('as_of.picker.preview', {
+        date: selectedDay.format('MMM D, YYYY'),
+        time: timeValue,
+      })
     : null
 
   return (
@@ -480,10 +485,10 @@ export default function AsOfDropdown({ isOpen, onClose }: Props) {
               className="text-sm font-semibold"
               style={{ color: '#7dd3c8', letterSpacing: '0.04em' }}
             >
-              View Historical Snapshot
+              {t('as_of.picker.title')}
             </p>
             <p className="text-xs mt-0.5" style={{ color: '#64748b' }}>
-              Select a date — time defaults to 00:00
+              {t('as_of.picker.subtitle')}
             </p>
           </div>
 
@@ -581,10 +586,10 @@ export default function AsOfDropdown({ isOpen, onClose }: Props) {
               </svg>
               <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
                 <span style={{ fontSize: 11, fontWeight: 700, color: '#f87171' }}>
-                  Future date selected
+                  {t('as_of.picker.future_title')}
                 </span>
                 <span style={{ fontSize: 10, color: 'rgba(252,165,165,0.85)', lineHeight: 1.5 }}>
-                  Time travel only works for past timestamps. Please select a date and time in the past.
+                  {t('as_of.picker.future_detail')}
                 </span>
               </div>
             </div>
@@ -606,7 +611,7 @@ export default function AsOfDropdown({ isOpen, onClose }: Props) {
                 transition: 'background 0.15s',
               }}
             >
-              Apply
+              {t('general.apply')}
             </Button>
             <Button
               size="sm"
@@ -618,7 +623,7 @@ export default function AsOfDropdown({ isOpen, onClose }: Props) {
                 flex: 1,
               }}
             >
-              Clear &amp; Exit
+              {t('as_of.picker.clear_exit')}
             </Button>
           </div>
         </div>
@@ -629,11 +634,11 @@ export default function AsOfDropdown({ isOpen, onClose }: Props) {
             className="mb-1 text-xs font-semibold"
             style={{ color: '#7dd3c8', letterSpacing: '0.04em' }}
           >
-            Quick Times
+            {t('as_of.picker.quick_times')}
           </p>
           {QUICK_PRESETS.map((preset) => (
             <button
-              key={preset.label}
+              key={preset.key}
               onClick={() => handlePreset(preset.offsetMs)}
               className="rounded-lg px-3 py-1.5 text-left text-xs transition-colors"
               style={{ color: '#cbd5e1' }}
@@ -648,7 +653,7 @@ export default function AsOfDropdown({ isOpen, onClose }: Props) {
                 ;(e.currentTarget as HTMLButtonElement).style.color = '#cbd5e1'
               }}
             >
-              {preset.label}
+              {t(`as_of.quick_times.${preset.key}`)}
             </button>
           ))}
         </div>

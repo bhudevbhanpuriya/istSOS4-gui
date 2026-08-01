@@ -16,6 +16,7 @@
 
 import dayjs from 'dayjs'
 import utc from 'dayjs/plugin/utc'
+import { useTranslation } from 'react-i18next'
 
 import { useAsOf } from '@/context/AsOfContext'
 
@@ -28,6 +29,7 @@ function formatBannerDate(iso: string): string {
 
 export default function AsOfBanner() {
   const { isSnapshot, asOfDate } = useAsOf()
+  const { t } = useTranslation()
 
   if (!isSnapshot || !asOfDate) return null
 
@@ -62,7 +64,7 @@ export default function AsOfBanner() {
       </svg>
 
       <span>
-        Snapshot mode active — viewing data as of{' '}
+        {t('as_of.banner.snapshot_active')}{' '}
         <span className="font-bold" style={{ color: '#fbbf24' }}>
           {formatBannerDate(asOfDate)}
         </span>

@@ -301,5 +301,77 @@
       "observed_properties": "Observed Properties",
       "datastreams": "Datastreams"
     }
+  },
+  "as_of": {
+    "banner": {
+      "snapshot_active": "Snapshot mode active — viewing data as of"
+    },
+    "navbar": {
+      "live": "Live",
+      "exit_snapshot": "Exit snapshot mode",
+      "open_picker": "Open time travel picker"
+    },
+    "picker": {
+      "title": "View Historical Snapshot",
+      "subtitle": "Select a date — time defaults to 00:00",
+      "preview": "{{date}} at {{time}} (local)",
+      "clear_exit": "Clear & Exit",
+      "quick_times": "Quick Times",
+      "future_title": "Future date selected",
+      "future_detail": "Time travel only works for past timestamps. Please select a date and time in the past.",
+      "future_cell": "Cannot travel to a future date",
+      "previous": "Previous",
+      "next": "Next"
+    },
+    "quick_times": {
+      "last_5_minutes": "Last 5 minutes",
+      "last_10_minutes": "Last 10 minutes",
+      "last_30_minutes": "Last 30 minutes",
+      "last_1_hour": "Last 1 hour",
+      "last_3_hours": "Last 3 hours",
+      "last_6_hours": "Last 6 hours",
+      "last_1_day": "Last 1 day",
+      "last_1_week": "Last 1 week"
+    },
+    "calendar": {
+      "day_su": "Su",
+      "day_mo": "Mo",
+      "day_tu": "Tu",
+      "day_we": "We",
+      "day_th": "Th",
+      "day_fr": "Fr",
+      "day_sa": "Sa",
+      "month_1": "January",
+      "month_2": "February",
+      "month_3": "March",
+      "month_4": "April",
+      "month_5": "May",
+      "month_6": "June",
+      "month_7": "July",
+      "month_8": "August",
+      "month_9": "September",
+      "month_10": "October",
+      "month_11": "November",
+      "month_12": "December"
+    },
+    "scrubber": {
+      "title": "Timeline",
+      "commits_count_one": "{{count}} commit",
+      "commits_count_other": "{{count}} commits",
+      "no_history": "no history",
+      "now": "Now",
+      "before_range": "Date is before the navigable range",
+      "after_range": "Date is after the navigable range",
+      "aria_label": "Time travel scrubber"
+    },
+    "existence": {
+      "no_data_before": "No data before this date",
+      "no_data_after": "No data after this date",
+      "detail_before": "\"{{name}}\" has no data before {{date}}.",
+      "detail_after": "\"{{name}}\" has no data after {{date}}.",
+      "jump_earliest": "Jump to earliest data",
+      "jump_latest": "Jump to latest data",
+      "dismiss": "Dismiss"
+    }
   }
 }

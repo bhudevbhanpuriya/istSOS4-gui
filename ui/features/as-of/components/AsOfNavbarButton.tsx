@@ -17,6 +17,7 @@
 import dayjs from 'dayjs'
 import utc from 'dayjs/plugin/utc'
 import { useState } from 'react'
+import { useTranslation } from 'react-i18next'
 
 import { useAsOf } from '@/context/AsOfContext'
 import AsOfDropdown from './AsOfDropdown'
@@ -38,6 +39,7 @@ function formatChipLabel(iso: string): string {
 
 export default function AsOfNavbarButton() {
   const { asOfDate, isSnapshot, clearSnapshot } = useAsOf()
+  const { t } = useTranslation()
   const [dropdownOpen, setDropdownOpen] = useState(false)
 
   // In snapshot mode: clicking the chip exits snapshot (no dropdown)
@@ -56,7 +58,7 @@ export default function AsOfNavbarButton() {
     <div className="relative">
       <button
         onClick={handleClick}
-        aria-label={isSnapshot ? 'Exit snapshot mode' : 'Open time travel picker'}
+        aria-label={isSnapshot ? t('as_of.navbar.exit_snapshot') : t('as_of.navbar.open_picker')}
         className="flex items-center gap-1.5 rounded-full px-3 py-1 text-xs font-semibold transition-all duration-200"
         style={
           isSnapshot
@@ -111,7 +113,7 @@ export default function AsOfNavbarButton() {
                 style={{ background: '#10b981' }}
               />
             </span>
-            Live
+            {t('as_of.navbar.live')}
           </>
         )}
       </button>
