@@ -3,6 +3,7 @@ import utc from 'dayjs/plugin/utc'
 import { useEffect, useMemo, useRef, useState } from 'react'
 
 import { siteConfig } from '@/config/site'
+import { clampToSnapshotWindow, getSnapshotWindow } from '@/features/as-of/lib/snapshotWindow'
 import { getDataSourceToken } from '@/lib/dataSourceTokens'
 import { getObservationsByDatastream } from '@/services/observations'
 import { Datastream, Observation, Thing } from '@/types/domain'
@@ -115,19 +116,15 @@ export function useChartState({
       sourceEndpoint?.trim().replace(/\/+$/, '') ?? siteConfig.api_root
 
     if (asOfDate) {
-      // Snapshot mode: default window is strictly [asOfDate-7d, asOfDate].
-      // Stale cross-context ranges are handled by the asOfDate reset effect, so
-      // we do NOT discard out-of-window ranges here — the user must stay free to
-      // pan the date picker to wherever the data actually is (e.g. older data
-      // that existed as of the snapshot).
-      const snapshotEnd = dayjs.utc(asOfDate)
-      // Hard-clamp: end must never exceed the snapshot date
-      if (!endIso || dayjs.utc(endIso).isAfter(snapshotEnd)) {
-        endIso = snapshotEnd.toISOString()
-      }
-      if (!startIso) {
-        startIso = snapshotEnd.subtract(7, 'day').toISOString()
-      }
+      // Snapshot mode: the window is strictly [asOfDate-7d, asOfDate], clamped on
+      // BOTH ends. Anything outside it belongs to a different point in time than
+      // the snapshot being viewed, so a stale range (e.g. one left over from an
+      // earlier selection in this same snapshot) must never silently pull the
+      // chart to another date — when the window is empty the user is told so
+      // instead. Clamping here makes that invariant hold for every caller.
+      const clamped = clampToSnapshotWindow(asOfDate, startIso, endIso)
+      startIso = clamped.startIso
+      endIso = clamped.endIso
     } else if (!startIso || !endIso) {
       // Live mode: default window is [lastObs-7d, lastObs]
       const [, endRaw] = phenomenonTime?.split('/') ?? []
@@ -497,11 +494,9 @@ export function useChartState({
 
     // Fresh default window: [asOfDate-7d, asOfDate] in snapshot mode; in live
     // mode leave it empty so the phenomenonTime-based default takes over.
-    const [nextStart, nextEnd] = asOfDate
-      ? [
-          dayjs.utc(asOfDate).subtract(7, 'day').toISOString(),
-          dayjs.utc(asOfDate).toISOString(),
-        ]
+    const snapshotWindow = asOfDate ? getSnapshotWindow(asOfDate) : null
+    const [nextStart, nextEnd] = snapshotWindow
+      ? [snapshotWindow.startIso, snapshotWindow.endIso]
       : [null, null]
 
     // Re-anchor the displayed range right away (fixes the stale "Time range")

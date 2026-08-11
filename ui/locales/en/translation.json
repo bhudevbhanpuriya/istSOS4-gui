@@ -306,6 +306,11 @@
     "banner": {
       "snapshot_active": "Snapshot mode active — viewing data as of"
     },
+    "chart": {
+      "no_data_in_window": "No data available for this snapshot window.",
+      "no_data_ends_before": "No data available for this snapshot window — this datastream's measurements end {{date}}, before it.",
+      "no_data_starts_after": "No data available for this snapshot window — this datastream's measurements start {{date}}, after it."
+    },
     "navbar": {
       "live": "Live",
       "exit_snapshot": "Exit snapshot mode",

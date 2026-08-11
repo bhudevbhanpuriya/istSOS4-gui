@@ -15,6 +15,10 @@ import { useTranslation } from 'react-i18next'
 dayjs.extend(utc)
 
 import { CloseIcon } from '@/components/icons'
+import {
+  clampToSnapshotWindow,
+  getSnapshotWindow,
+} from '@/features/as-of/lib/snapshotWindow'
 import { Datastream, Observation, Thing } from '@/types/domain'
 
 import ObservationGraph from './ObservationGraph'
@@ -65,14 +69,18 @@ function toRangeValue(start?: string | null, end?: string | null) {
 
 /**
  * Builds a human-readable reason for why the snapshot window is empty, using the
- * datastream's own phenomenonTime extent ("isoStart/isoEnd"). Purely
- * informational — it never changes the as-of state, it just tells the user where
- * the data actually is relative to the [as_of-7d, as_of] window they're viewing.
+ * datastream's own phenomenonTime extent ("isoStart/isoEnd").
+ *
+ * Purely informational — it never changes the as-of state and never sends the
+ * user outside the window. In As-Of mode the chart stays pinned to
+ * [as_of-7d, as_of]; this only says that the window holds no observations and,
+ * when known, where this datastream's measurements actually lie.
  */
 function describeSnapshotGap(
   datastream: Datastream | null,
-  start?: string | null,
-  end?: string | null
+  start: string | null | undefined,
+  end: string | null | undefined,
+  t: (key: string, options?: Record<string, unknown>) => string
 ): string {
   const fmt = (d: dayjs.Dayjs) => d.utc().format('MMM D, YYYY')
   const [dataStartIso, dataEndIso] = String(datastream?.phenomenonTime ?? '').split('/')
@@ -82,12 +90,12 @@ function describeSnapshotGap(
   const winEnd = end ? dayjs.utc(end) : null
 
   if (dataEnd && winStart && dataEnd.isBefore(winStart)) {
-    return `No data in this window — this datastream's measurements end ${fmt(dataEnd)}, before the selected range. Pan the date picker back to view them.`
+    return t('as_of.chart.no_data_ends_before', { date: fmt(dataEnd) })
   }
   if (dataStart && winEnd && dataStart.isAfter(winEnd)) {
-    return `No data in this window — this datastream's measurements start ${fmt(dataStart)}, after the selected range.`
+    return t('as_of.chart.no_data_starts_after', { date: fmt(dataStart) })
   }
-  return 'No observations were recorded in this snapshot window.'
+  return t('as_of.chart.no_data_in_window')
 }
 
 export default function ChartModal({
@@ -120,6 +128,8 @@ export default function ChartModal({
   const { t } = useTranslation()
   const rangeValue = toRangeValue(start, end)
   const timeZone = getLocalTimeZone()
+  // Hard bounds of the snapshot window — the date picker cannot leave these.
+  const snapshotBounds = asOfDate ? getSnapshotWindow(asOfDate) : null
   // Snapshot-mode empty-window notice: informational only, never mutates as-of.
   const hasData =
     observations.length > 0 ||
@@ -127,8 +137,16 @@ export default function ChartModal({
   const showSnapshotNoData =
     isSnapshot && !loading && !error && !!datastream && !hasData
   const snapshotNoDataMessage = showSnapshotNoData
-    ? describeSnapshotGap(datastream, start, end)
+    ? describeSnapshotGap(datastream, start, end, t)
     : null
+  // The window the chart is pinned to, restated alongside the notice so the
+  // empty result is unambiguously tied to the snapshot the user selected.
+  const snapshotWindowLabel =
+    start && end
+      ? `${dayjs.utc(start).format('MMM D, YYYY HH:mm')} — ${dayjs
+          .utc(end)
+          .format('MMM D, YYYY HH:mm')} UTC`
+      : null
   const thingOptions = things.map((entry) => {
     const key = `${String(entry?.__sourceId ?? entry?.__sourceEndpoint ?? '0')}::${String(
       entry?.['@iot.id'] ?? entry?.id ?? entry?.name ?? ''
@@ -257,17 +275,27 @@ export default function ChartModal({
                 }
 
                 if (nextValue.start && nextValue.end) {
-                  let endIso = nextValue.end.toDate(timeZone).toISOString()
-                  // Safety clamp: in snapshot mode end must never exceed asOfDate
-                  if (asOfDate && endIso > asOfDate) endIso = asOfDate
-                  onApplyRange?.(
-                    nextValue.start.toDate(timeZone).toISOString(),
-                    endIso
-                  )
+                  const startIso = nextValue.start.toDate(timeZone).toISOString()
+                  const endIso = nextValue.end.toDate(timeZone).toISOString()
+                  // In snapshot mode the range is clamped into [as_of-7d, as_of]
+                  // on both ends, so the chart can never drift to another date.
+                  const clamped = asOfDate
+                    ? clampToSnapshotWindow(asOfDate, startIso, endIso)
+                    : { startIso, endIso }
+                  onApplyRange?.(clamped.startIso, clamped.endIso)
                 }
               }}
-              // Lock right bound to asOfDate in snapshot mode
-              maxValue={asOfDate ? parseAbsoluteToLocal(asOfDate) : undefined}
+              // Lock BOTH bounds to the snapshot window in As-Of mode
+              minValue={
+                snapshotBounds
+                  ? parseAbsoluteToLocal(snapshotBounds.startIso)
+                  : undefined
+              }
+              maxValue={
+                snapshotBounds
+                  ? parseAbsoluteToLocal(snapshotBounds.endIso)
+                  : undefined
+              }
               variant="bordered"
               label={t('chart.time_range')}
               className="w-full"
@@ -290,7 +318,17 @@ export default function ChartModal({
                 }}
               >
                 <span aria-hidden>⚠</span>
-                <span>{snapshotNoDataMessage}</span>
+                <span>
+                  {snapshotNoDataMessage}
+                  {snapshotWindowLabel && (
+                    <>
+                      {' '}
+                      <span className="whitespace-nowrap opacity-80">
+                        ({snapshotWindowLabel})
+                      </span>
+                    </>
+                  )}
+                </span>
               </div>
             )}
             <div className="min-h-0 flex-1">
