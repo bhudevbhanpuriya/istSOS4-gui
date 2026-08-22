@@ -311,6 +311,9 @@
       "no_data_ends_before": "Nessun dato disponibile per questa finestra di snapshot — le misure di questo datastream terminano il {{date}}, prima di essa.",
       "no_data_starts_after": "Nessun dato disponibile per questa finestra di snapshot — le misure di questo datastream iniziano il {{date}}, dopo di essa."
     },
+    "table": {
+      "read_only": "Sola lettura in modalità snapshot"
+    },
     "navbar": {
       "live": "Live",
       "exit_snapshot": "Esci dalla modalità snapshot",

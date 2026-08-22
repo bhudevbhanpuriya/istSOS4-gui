@@ -358,34 +358,50 @@ export default function DatastreamTable({
                   <ChartIcon size={18} />
                 </Button>
               </Tooltip>
-              {!isSnapshot && (
-                <>
-                  <Tooltip color="primary" content={t('general.edit')}>
-                    <Button
-                      isIconOnly
-                      className="h-6 w-6 min-w-6"
-                      size="sm"
-                      variant="light"
-                      color="primary"
-                      onPress={handleEdit}
-                    >
-                      <EditIcon size={18} />
-                    </Button>
-                  </Tooltip>
-                  <Tooltip color="danger" content={t('general.delete')}>
-                    <Button
-                      isIconOnly
-                      className="h-6 w-6 min-w-6"
-                      size="sm"
-                      variant="light"
-                      color="danger"
-                      onPress={handleDelete}
-                    >
-                      <DeleteIcon size={18} />
-                    </Button>
-                  </Tooltip>
-                </>
-              )}
+              {/* In snapshot mode the write actions stay visible but greyed out
+                  and inert, so a row's actions read the same in both modes and
+                  the reason is one hover away. The wrapping span keeps the
+                  tooltip hoverable — a disabled button receives no events. */}
+              <Tooltip
+                color={isSnapshot ? 'foreground' : 'primary'}
+                content={
+                  isSnapshot ? t('as_of.table.read_only') : t('general.edit')
+                }
+              >
+                <span className={isSnapshot ? 'cursor-not-allowed' : undefined}>
+                  <Button
+                    isIconOnly
+                    isDisabled={isSnapshot}
+                    className={`h-6 w-6 min-w-6 ${isSnapshot ? 'opacity-40' : ''}`}
+                    size="sm"
+                    variant="light"
+                    color="primary"
+                    onPress={handleEdit}
+                  >
+                    <EditIcon size={18} />
+                  </Button>
+                </span>
+              </Tooltip>
+              <Tooltip
+                color={isSnapshot ? 'foreground' : 'danger'}
+                content={
+                  isSnapshot ? t('as_of.table.read_only') : t('general.delete')
+                }
+              >
+                <span className={isSnapshot ? 'cursor-not-allowed' : undefined}>
+                  <Button
+                    isIconOnly
+                    isDisabled={isSnapshot}
+                    className={`h-6 w-6 min-w-6 ${isSnapshot ? 'opacity-40' : ''}`}
+                    size="sm"
+                    variant="light"
+                    color="danger"
+                    onPress={handleDelete}
+                  >
+                    <DeleteIcon size={18} />
+                  </Button>
+                </span>
+              </Tooltip>
             </div>
           )
 
@@ -393,7 +409,9 @@ export default function DatastreamTable({
           return <span>{''}</span>
       }
     },
-    [lang, onDeleteDatastream, onEditDatastream, onOpenDetails, t, thing]
+    // isSnapshot decides whether the write actions render disabled, so leaving
+    // it out would keep the cells stale across a snapshot/live switch.
+    [isSnapshot, lang, onDeleteDatastream, onEditDatastream, onOpenDetails, t, thing]
   )
 
   if (!thing) return null
@@ -436,7 +454,12 @@ export default function DatastreamTable({
             </div>
           )}
           <TableComponent
-          key={lang}
+          // Remounted on a snapshot/live switch as well as a language change:
+          // the table's collection caches each row's rendered cells against the
+          // row object, so when the same datastream objects come back (an
+          // unresolved snapshot falls back to the live thing) the disabled
+          // action buttons would otherwise stay disabled in live mode.
+          key={`${lang}-${isSnapshot ? 'snapshot' : 'live'}`}
           items={datastreams}
           columns={columns}
           rowKey={(item, index) =>

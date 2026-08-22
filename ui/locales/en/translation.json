@@ -311,6 +311,9 @@
       "no_data_ends_before": "No data available for this snapshot window — this datastream's measurements end {{date}}, before it.",
       "no_data_starts_after": "No data available for this snapshot window — this datastream's measurements start {{date}}, after it."
     },
+    "table": {
+      "read_only": "Read-only in snapshot mode"
+    },
     "navbar": {
       "live": "Live",
       "exit_snapshot": "Exit snapshot mode",
