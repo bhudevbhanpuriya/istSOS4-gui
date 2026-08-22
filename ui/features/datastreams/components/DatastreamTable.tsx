@@ -117,6 +117,11 @@ type Props = {
   isSnapshot?: boolean
   /** The ISO snapshot datetime, shown in the read-only banner */
   asOfDate?: string | null
+  /**
+   * Set when the snapshot could not be resolved — the rows below are then LIVE
+   * data, and the banner has to say so instead of claiming to show the snapshot.
+   */
+  snapshotError?: string | null
   onClose: () => void
   onCreateDatastream?: () => void
   onOpenDetails?: (datastream: Datastream) => void
@@ -149,6 +154,7 @@ export default function DatastreamTable({
   observedPropertyNameFilter = null,
   isSnapshot = false,
   asOfDate = null,
+  snapshotError = null,
   onClose,
   onCreateDatastream,
   onOpenDetails,
@@ -438,19 +444,30 @@ export default function DatastreamTable({
             <div
               className="flex items-center gap-2 px-3 py-1 text-xs font-medium"
               style={{
-                background: 'linear-gradient(90deg, rgba(120,53,15,0.12) 0%, rgba(146,64,14,0.12) 100%)',
-                borderBottom: '1px solid rgba(251,191,36,0.25)',
-                color: '#b45309',
+                background: snapshotError
+                  ? 'linear-gradient(90deg, rgba(153,27,27,0.14) 0%, rgba(185,28,28,0.14) 100%)'
+                  : 'linear-gradient(90deg, rgba(120,53,15,0.12) 0%, rgba(146,64,14,0.12) 100%)',
+                borderBottom: snapshotError
+                  ? '1px solid rgba(248,113,113,0.35)'
+                  : '1px solid rgba(251,191,36,0.25)',
+                color: snapshotError ? '#b91c1c' : '#b45309',
               }}
             >
-              <span>
-                ⚙ Snapshot mode — read-only — showing data as of{' '}
-                <span className="font-bold">
-                  {asOfDate
-                    ? dayjs.utc(asOfDate).format('MMM D, YYYY HH:mm') + ' UTC'
-                    : ''}
+              {snapshotError ? (
+                <span>
+                  ⚠ Snapshot could not be loaded — showing{' '}
+                  <span className="font-bold">live</span> data ({snapshotError})
                 </span>
-              </span>
+              ) : (
+                <span>
+                  ⚙ Snapshot mode — read-only — showing data as of{' '}
+                  <span className="font-bold">
+                    {asOfDate
+                      ? dayjs.utc(asOfDate).format('MMM D, YYYY HH:mm') + ' UTC'
+                      : ''}
+                  </span>
+                </span>
+              )}
             </div>
           )}
           <TableComponent

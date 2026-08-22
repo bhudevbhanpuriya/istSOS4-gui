@@ -15,7 +15,11 @@
 import { useEffect, useState } from 'react'
 
 import type { Thing } from '@/types/domain'
-import { activeAdapter, type ExistenceState } from '../adapters/asOfAdapter'
+import {
+  activeAdapter,
+  type ExistenceState,
+  type ResolvedThing,
+} from '../adapters/asOfAdapter'
 
 // ---------------------------------------------------------------------------
 // Types (re-exported for consumers)
@@ -27,6 +31,11 @@ export type AsOfThingResult = {
   /** The thing as it existed at asOfDate (or the live thing when not in snapshot mode) */
   snapshotThing: Thing | null
   isLoading: boolean
+  /**
+   * Set when the snapshot could not be resolved. `snapshotThing` then holds the
+   * LIVE thing so the panel is never blank — consumers must say so rather than
+   * present it as snapshot data.
+   */
   error: string | null
   /**
    * 'exists'          — a valid version was resolved for asOfDate.
@@ -62,23 +71,32 @@ export function useAsOfThing({
   thing: Thing | null
   asOfDate: string | null
 }): AsOfThingResult {
-  const [snapshotThing, setSnapshotThing] = useState<Thing | null>(thing)
+  // The resolution is stored together with the (thing, date) it belongs to, so
+  // it can never be rendered for a different thing or a different date.
+  const [resolution, setResolution] = useState<{
+    key: string
+    thingKey: string
+    result: ResolvedThing
+  } | null>(null)
   const [isLoading, setIsLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
-  const [existenceState, setExistenceState] = useState<ExistenceState>('exists')
-  const [existenceRange, setExistenceRange] = useState<{
-    createdAt: string | null
-    deletedAt: string | null
-  }>({ createdAt: null, deletedAt: null })
+
+  // Scoped by data source: two sources can hand out the same @iot.id.
+  const thingKey = thing
+    ? `${String(thing.__sourceEndpoint ?? '')}::${String(
+        thing['@iot.id'] ?? thing.id ?? thing.name ?? ''
+      )}`
+    : ''
+  const requestKey = thing && asOfDate ? `${thingKey}|${asOfDate}` : ''
 
   useEffect(() => {
-    // Live mode — always show the thing as-is
-    if (!asOfDate || !thing) {
-      setSnapshotThing(thing)
+    // Live mode — nothing to resolve. The live thing is returned below without
+    // waiting for any async work, so leaving snapshot mode shows live data on
+    // the very same render.
+    if (!requestKey || !thing || !asOfDate) {
+      setResolution(null)
       setIsLoading(false)
       setError(null)
-      setExistenceState('exists')
-      setExistenceRange({ createdAt: null, deletedAt: null })
       return
     }
 
@@ -90,17 +108,17 @@ export function useAsOfThing({
       .resolveThing(thing, asOfDate)
       .then((result) => {
         if (cancelled) return
-        setSnapshotThing(result.thing)
-        setExistenceState(result.existenceState)
-        setExistenceRange(result.existenceRange)
+        setResolution({ key: requestKey, thingKey, result })
+        setError(null)
       })
       .catch((err) => {
         if (cancelled) return
         console.error('[useAsOfThing] Error resolving snapshot:', err)
-        setError(String(err))
-        // Fall back to live thing so UI is never blank
-        setSnapshotThing(thing)
-        setExistenceState('exists')
+        // Drop the previous resolution: it belongs to another date and must not
+        // be passed off as this one. The live thing is shown instead, and
+        // `error` tells consumers to label it as such.
+        setResolution(null)
+        setError(err instanceof Error ? err.message : String(err))
       })
       .finally(() => {
         if (!cancelled) setIsLoading(false)
@@ -109,7 +127,27 @@ export function useAsOfThing({
     return () => {
       cancelled = true
     }
-  }, [thing, asOfDate])
+  }, [thing, asOfDate, requestKey, thingKey])
 
-  return { snapshotThing, isLoading, error, existenceState, existenceRange }
+  // A resolution for this exact date, or — while a new date is still loading —
+  // the previous one for the SAME thing, which keeps scrubbing from flickering.
+  // A resolution belonging to another thing is never reused.
+  const active =
+    resolution && (resolution.key === requestKey || resolution.thingKey === thingKey)
+      ? resolution.result
+      : null
+
+  const isSnapshotMode = !!asOfDate && !!thing
+
+  return {
+    snapshotThing: isSnapshotMode ? (active?.thing ?? thing) : thing,
+    isLoading,
+    error,
+    existenceState: isSnapshotMode
+      ? (active?.existenceState ?? 'exists')
+      : 'exists',
+    existenceRange: isSnapshotMode
+      ? (active?.existenceRange ?? { createdAt: null, deletedAt: null })
+      : { createdAt: null, deletedAt: null },
+  }
 }

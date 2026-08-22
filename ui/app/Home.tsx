@@ -174,7 +174,13 @@ export default function Home({
   })
 
   // Resolve the thing as it existed at asOfDate (mock for dummy data, stub for real)
-  const { snapshotThing, isLoading: snapshotLoading, existenceState, existenceRange } = useAsOfThing({
+  const {
+    snapshotThing,
+    isLoading: snapshotLoading,
+    error: snapshotError,
+    existenceState,
+    existenceRange,
+  } = useAsOfThing({
     thing: selectedThing,
     asOfDate,
   })
@@ -320,6 +326,7 @@ export default function Home({
                 observedPropertyNameFilter={tableObservedPropertyFilter}
                 isSnapshot={isSnapshot}
                 asOfDate={asOfDate}
+                snapshotError={snapshotError}
                 onClose={closePanel}
                 onCreateDatastream={() => {
                   setCreateFormState({

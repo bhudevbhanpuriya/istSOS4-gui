@@ -32,7 +32,8 @@
 import dayjs from 'dayjs'
 import utc from 'dayjs/plugin/utc'
 
-import type { Thing } from '@/types/domain'
+import type { Datastream, Thing } from '@/types/domain'
+import { normalizedBasePath } from '@/app/home/utils'
 import { getDataSourceToken } from '@/lib/dataSourceTokens'
 import {
   localDummyThings,
@@ -91,12 +92,6 @@ export interface AsOfAdapter {
 
 function thingId(thing: Thing): string {
   return String(thing['@iot.id'] ?? thing.id ?? '')
-}
-
-/** Build auth headers if a token is stored for this endpoint. */
-function buildHeaders(endpoint: string): HeadersInit {
-  const token = getDataSourceToken(endpoint)
-  return token ? { Authorization: `Bearer ${token}` } : {}
 }
 
 // ---------------------------------------------------------------------------
@@ -251,7 +246,15 @@ const mockAdapter: AsOfAdapter = {
 }
 
 // ---------------------------------------------------------------------------
-// apiAdapter — calls the real backend $as_of endpoint
+// apiAdapter — reads the real backend `$as_of` data through the app's own
+// server routes (/api/as-of/*).
+//
+// It cannot call the API directly: NEXT_PUBLIC_ISTSOS4_URL is the API's Docker
+// network name, which the browser cannot resolve, and the API registers no CORS
+// middleware — so a direct client-side fetch always throws. Every such failure
+// used to be swallowed and answered with LIVE data, which is why the datastream
+// table never changed with the selected date. The hop below runs the request
+// inside the Next server, where the name resolves and CORS does not apply.
 //
 // Backend Commit shape (from GET /Things(id)/Commit):
 //   { "@iot.id": 2, "author": "/Users(1)", "message": "...", "date": "...", "actionType": "CREATE" }
@@ -267,43 +270,47 @@ type BackendCommit = {
   actionType: string
 }
 
-/**
- * Fetch a Thing's commit history (transaction-time events). Prefers the plural
- * `/Commits` collection (full history) and falls back to the singular `/Commit`
- * (creation commit only) on backends that don't expose the collection.
- */
-async function fetchThingCommits(
-  endpoint: string,
-  id: string
-): Promise<BackendCommit[]> {
-  const pluralUrl = `${endpoint}/Things(${id})/Commits?$select=@iot.id,message,date,actionType`
-  try {
-    const res = await fetch(pluralUrl, {
-      headers: buildHeaders(endpoint),
-      cache: 'no-store',
-    })
-    if (res.ok) {
-      const data = await res.json()
-      if (Array.isArray(data?.value)) return data.value as BackendCommit[]
-    }
-  } catch {
-    // Ignore and try the singular endpoint below.
+const asOfThingApiPath = `${normalizedBasePath}/api/as-of/thing`
+const asOfCommitsApiPath = `${normalizedBasePath}/api/as-of/commits`
+
+/** POST to one of our own as-of routes. Throws on a transport-level failure. */
+async function postAsOf<T>(
+  path: string,
+  payload: Record<string, unknown>
+): Promise<T> {
+  const response = await fetch(path, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+    cache: 'no-store',
+  })
+
+  if (!response.ok) {
+    throw new Error(`As-of request failed (${response.status})`)
   }
 
-  const singularUrl = `${endpoint}/Things(${id})/Commit`
-  try {
-    const res = await fetch(singularUrl, {
-      headers: buildHeaders(endpoint),
-      cache: 'no-store',
-    })
-    if (!res.ok) return []
-    const data = await res.json()
-    if (Array.isArray(data?.value)) return data.value as BackendCommit[]
-    if (data?.['@iot.id'] != null) return [data as BackendCommit]
-    return []
-  } catch {
-    return []
+  const data = await response.json().catch(() => null)
+  if (!data) throw new Error('Malformed as-of response')
+  return data as T
+}
+
+/**
+ * Re-attaches the source metadata (`__sourceId` / `__sourceName` /
+ * `__sourceEndpoint`) that the live thing carries and the raw API response does
+ * not. Downstream code resolves which data source to query from these, so a
+ * snapshot thing without them would be unusable.
+ */
+function withSourceMeta(resolved: Thing, live: Thing): Thing {
+  const meta = {
+    __sourceId: live.__sourceId,
+    __sourceName: live.__sourceName,
+    __sourceEndpoint: live.__sourceEndpoint,
   }
+  const datastreams = Array.isArray(resolved.Datastreams)
+    ? resolved.Datastreams.map((ds: Datastream) => ({ ...ds, ...meta }))
+    : resolved.Datastreams
+
+  return { ...resolved, ...meta, Datastreams: datastreams }
 }
 
 /**
@@ -327,6 +334,14 @@ function existenceRangeFromCommits(commits: BackendCommit[]): {
   return { createdAt, deletedAt: deleteCommit?.date ?? null }
 }
 
+type ThingAsOfResponse = {
+  ok: boolean
+  status?: number
+  thing?: Thing | null
+  commits?: BackendCommit[]
+  error?: string
+}
+
 const apiAdapter: AsOfAdapter = {
   async resolveThing(thing, asOfDate) {
     const id = thingId(thing)
@@ -335,53 +350,48 @@ const apiAdapter: AsOfAdapter = {
       return { thing, existenceState: 'exists', existenceRange: { createdAt: null, deletedAt: null } }
     }
 
-    const expand = [
-      'Datastreams($expand=Network,Sensor,ObservedProperty,Observations($top=1;$orderby=phenomenonTime desc))',
-      'Locations',
-    ].join(',')
+    // A failure is reported, never papered over with live data: showing live
+    // rows under a "snapshot" banner is indistinguishable from a working
+    // snapshot, which is exactly the bug this adapter used to have.
+    const payload = await postAsOf<ThingAsOfResponse>(asOfThingApiPath, {
+      endpoint,
+      thingId: id,
+      asOfDate,
+      token: getDataSourceToken(endpoint),
+    })
 
-    const url = `${endpoint}/Things(${id})?$as_of=${encodeURIComponent(asOfDate)}&$expand=${expand}`
+    if (!payload.ok) {
+      throw new Error(payload.error ?? 'Could not resolve snapshot')
+    }
 
-    try {
-      const res = await fetch(url, {
-        headers: buildHeaders(endpoint),
-        cache: 'no-store',
-      })
+    if (payload.status === 404) {
+      // The backend returns 404 when the thing didn't exist at that time.
+      // Determine "not-yet-created vs deleted" from the COMMIT history
+      // (transaction time — the axis $as_of filters on), NOT phenomenonTime.
+      // Falls back to phenomenonTime only when no commit history is available.
+      const commits = payload.commits ?? []
+      const existenceRange =
+        commits.length > 0
+          ? existenceRangeFromCommits(commits)
+          : inferExistenceRange(thing)
+      const target = dayjs.utc(asOfDate)
+      const createdAt = existenceRange.createdAt
+        ? dayjs.utc(existenceRange.createdAt)
+        : null
+      const existenceState: ExistenceState =
+        createdAt && target.isBefore(createdAt) ? 'not-yet-created' : 'deleted'
+      return { thing: { ...thing, Datastreams: [] }, existenceState, existenceRange }
+    }
 
-      if (res.status === 404) {
-        // The backend returns 404 when the thing didn't exist at that time.
-        // Determine "not-yet-created vs deleted" from the COMMIT history
-        // (transaction time — the axis $as_of filters on), NOT phenomenonTime.
-        // Falls back to phenomenonTime only when no commit history is available.
-        const commits = await fetchThingCommits(endpoint, id)
-        const existenceRange =
-          commits.length > 0
-            ? existenceRangeFromCommits(commits)
-            : inferExistenceRange(thing)
-        const target = dayjs.utc(asOfDate)
-        const createdAt = existenceRange.createdAt
-          ? dayjs.utc(existenceRange.createdAt)
-          : null
-        const existenceState: ExistenceState =
-          createdAt && target.isBefore(createdAt) ? 'not-yet-created' : 'deleted'
-        return { thing: { ...thing, Datastreams: [] }, existenceState, existenceRange }
-      }
+    if (!payload.thing) {
+      throw new Error('Snapshot response contained no thing')
+    }
 
-      if (!res.ok) {
-        // Unexpected error — fall back to live thing to avoid blank UI
-        console.warn(`[asOfAdapter] $as_of fetch failed (${res.status}) for Thing(${id})`)
-        return { thing, existenceState: 'exists', existenceRange: { createdAt: null, deletedAt: null } }
-      }
-
-      const data = await res.json()
-      return {
-        thing: data as Thing,
-        existenceState: 'exists',
-        existenceRange: inferExistenceRange(data as Thing),
-      }
-    } catch (err) {
-      console.warn('[asOfAdapter] Network error resolving thing:', err)
-      return { thing, existenceState: 'exists', existenceRange: { createdAt: null, deletedAt: null } }
+    const resolved = withSourceMeta(payload.thing, thing)
+    return {
+      thing: resolved,
+      existenceState: 'exists',
+      existenceRange: inferExistenceRange(resolved),
     }
   },
 
@@ -390,11 +400,12 @@ const apiAdapter: AsOfAdapter = {
     const endpoint = (thing.__sourceEndpoint ?? '').replace(/\/$/, '')
     if (!endpoint) return []
 
-    // Full history via the plural /Commits collection (falls back to the
-    // singular creation commit on older backends). Mapped oldest → newest so
-    // the scrubber can place a tick per commit.
-    const commits = await fetchThingCommits(endpoint, id)
-    return commits
+    const payload = await postAsOf<{ ok: boolean; commits?: BackendCommit[] }>(
+      asOfCommitsApiPath,
+      { endpoint, thingId: id, token: getDataSourceToken(endpoint) }
+    )
+
+    return (payload.commits ?? [])
       .filter((commit) => !!commit?.date)
       .map((commit) => ({
         id: String(commit['@iot.id']),
