@@ -15,10 +15,7 @@ import { useTranslation } from 'react-i18next'
 dayjs.extend(utc)
 
 import { CloseIcon } from '@/components/icons'
-import {
-  clampToSnapshotWindow,
-  getSnapshotWindow,
-} from '@/features/as-of/lib/snapshotWindow'
+import { getSnapshotWindow } from '@/features/as-of/lib/snapshotWindow'
 import { Datastream, Observation, Thing } from '@/types/domain'
 
 import ObservationGraph from './ObservationGraph'
@@ -49,8 +46,14 @@ type ChartModalProps = {
   onObservedPropertyNamesChange?: (observedPropertyNames: string[]) => void
   /** True when the app is in As-Of snapshot mode */
   isSnapshot?: boolean
-  /** ISO-8601 snapshot datetime — used to clamp the date picker and show the badge */
+  /** ISO-8601 snapshot datetime — anchors the default window and shows the badge */
   asOfDate?: string | null
+  /**
+   * True when the snapshot window held no observations and the chart fell back
+   * to the live-mode window (the 7 days ending at the last measurement that
+   * existed at the snapshot).
+   */
+  isAsOfFallback?: boolean
 }
 
 type DateRangeChangeValue = {
@@ -68,13 +71,13 @@ function toRangeValue(start?: string | null, end?: string | null) {
 }
 
 /**
- * Builds a human-readable reason for why the snapshot window is empty, using the
+ * Builds a human-readable reason for why the shown window is empty, using the
  * datastream's own phenomenonTime extent ("isoStart/isoEnd").
  *
- * Purely informational — it never changes the as-of state and never sends the
- * user outside the window. In As-Of mode the chart stays pinned to
- * [as_of-7d, as_of]; this only says that the window holds no observations and,
- * when known, where this datastream's measurements actually lie.
+ * Purely informational — it never changes the as-of state. It is reached only
+ * when the datastream has no observations at this point in time at all (an
+ * empty [as_of-7d, as_of] window falls back to the live-mode window before the
+ * chart ever renders empty).
  */
 function describeSnapshotGap(
   datastream: Datastream | null,
@@ -124,13 +127,31 @@ export default function ChartModal({
   onObservedPropertyNamesChange,
   isSnapshot = false,
   asOfDate = null,
+  isAsOfFallback = false,
 }: ChartModalProps) {
   const { t } = useTranslation()
   const rangeValue = toRangeValue(start, end)
   const timeZone = getLocalTimeZone()
-  // Hard bounds of the snapshot window — the date picker cannot leave these.
-  const snapshotBounds = asOfDate ? getSnapshotWindow(asOfDate) : null
-  // Snapshot-mode empty-window notice: informational only, never mutates as-of.
+  // The default window a snapshot opens on. It is an anchor, not a bound: the
+  // date picker is free to leave it, exactly as in live mode.
+  const snapshotWindow = asOfDate ? getSnapshotWindow(asOfDate) : null
+  const sameInstant = (a?: string | null, b?: string | null) =>
+    !!a && !!b && dayjs.utc(a).valueOf() === dayjs.utc(b).valueOf()
+  // True only while the chart shows the as-of anchored window — the one case
+  // where the x-axis is pinned, so a sparse snapshot still draws its full 7 days.
+  const isAsOfDefaultWindow =
+    isSnapshot &&
+    sameInstant(start, snapshotWindow?.startIso) &&
+    sameInstant(end, snapshotWindow?.endIso)
+  // The snapshot marker is drawn only when as_of falls inside the shown window;
+  // outside it, it would stretch the axis across the gap and squash the data.
+  const isAsOfInsideWindow =
+    !!asOfDate &&
+    !!start &&
+    !!end &&
+    !dayjs.utc(asOfDate).isBefore(dayjs.utc(start)) &&
+    !dayjs.utc(asOfDate).isAfter(dayjs.utc(end))
+  // Snapshot-mode notices: informational only, they never mutate as-of.
   const hasData =
     observations.length > 0 ||
     allSeries.some((series) => series.observations.length > 0)
@@ -139,14 +160,23 @@ export default function ChartModal({
   const snapshotNoDataMessage = showSnapshotNoData
     ? describeSnapshotGap(datastream, start, end, t)
     : null
-  // The window the chart is pinned to, restated alongside the notice so the
-  // empty result is unambiguously tied to the snapshot the user selected.
-  const snapshotWindowLabel =
+  // Says that the snapshot window was empty and the chart moved to the latest
+  // data that existed at the snapshot, so the dates on screen are never a surprise.
+  const fallbackMessage =
+    isSnapshot && isAsOfFallback && !loading && !error && hasData && asOfDate
+      ? t('as_of.chart.fallback_notice', {
+          date: dayjs.utc(asOfDate).format('MMM D, YYYY HH:mm'),
+        })
+      : null
+  // The window currently on screen, restated alongside a notice so the message
+  // is unambiguously tied to the dates being shown.
+  const shownWindowLabel =
     start && end
       ? `${dayjs.utc(start).format('MMM D, YYYY HH:mm')} — ${dayjs
           .utc(end)
           .format('MMM D, YYYY HH:mm')} UTC`
       : null
+  const noticeMessage = snapshotNoDataMessage ?? fallbackMessage
   const thingOptions = things.map((entry) => {
     const key = `${String(entry?.__sourceId ?? entry?.__sourceEndpoint ?? '0')}::${String(
       entry?.['@iot.id'] ?? entry?.id ?? entry?.name ?? ''
@@ -275,27 +305,15 @@ export default function ChartModal({
                 }
 
                 if (nextValue.start && nextValue.end) {
-                  const startIso = nextValue.start.toDate(timeZone).toISOString()
-                  const endIso = nextValue.end.toDate(timeZone).toISOString()
-                  // In snapshot mode the range is clamped into [as_of-7d, as_of]
-                  // on both ends, so the chart can never drift to another date.
-                  const clamped = asOfDate
-                    ? clampToSnapshotWindow(asOfDate, startIso, endIso)
-                    : { startIso, endIso }
-                  onApplyRange?.(clamped.startIso, clamped.endIso)
+                  // The picked range is used as-is in both modes — As-Of mode
+                  // adds no bounds of its own. Fetches keep sending `$as_of`,
+                  // so any range still shows the data as of the snapshot.
+                  onApplyRange?.(
+                    nextValue.start.toDate(timeZone).toISOString(),
+                    nextValue.end.toDate(timeZone).toISOString()
+                  )
                 }
               }}
-              // Lock BOTH bounds to the snapshot window in As-Of mode
-              minValue={
-                snapshotBounds
-                  ? parseAbsoluteToLocal(snapshotBounds.startIso)
-                  : undefined
-              }
-              maxValue={
-                snapshotBounds
-                  ? parseAbsoluteToLocal(snapshotBounds.endIso)
-                  : undefined
-              }
               variant="bordered"
               label={t('chart.time_range')}
               className="w-full"
@@ -307,7 +325,7 @@ export default function ChartModal({
               size="sm"
             />
             </div>
-            {snapshotNoDataMessage && (
+            {noticeMessage && (
               <div
                 className="mb-2 flex shrink-0 items-start gap-2 rounded px-3 py-2 text-xs"
                 role="status"
@@ -317,14 +335,14 @@ export default function ChartModal({
                   color: '#b45309',
                 }}
               >
-                <span aria-hidden>⚠</span>
+                <span aria-hidden>{snapshotNoDataMessage ? '⚠' : '⏱'}</span>
                 <span>
-                  {snapshotNoDataMessage}
-                  {snapshotWindowLabel && (
+                  {noticeMessage}
+                  {shownWindowLabel && (
                     <>
                       {' '}
                       <span className="whitespace-nowrap opacity-80">
-                        ({snapshotWindowLabel})
+                        ({shownWindowLabel})
                       </span>
                     </>
                   )}
@@ -344,9 +362,9 @@ export default function ChartModal({
                 loading={loading}
                 error={error}
                 onDownloadAllDatastreams={onDownloadAllDatastreams}
-                snapshotDate={asOfDate ?? undefined}
-                windowStart={isSnapshot ? start : null}
-                windowEnd={isSnapshot ? end : null}
+                snapshotDate={isAsOfInsideWindow ? asOfDate : undefined}
+                windowStart={isAsOfDefaultWindow ? start : null}
+                windowEnd={isAsOfDefaultWindow ? end : null}
                 height="100%"
               />
             </div>

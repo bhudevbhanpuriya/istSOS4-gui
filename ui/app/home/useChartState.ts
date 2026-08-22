@@ -3,9 +3,16 @@ import utc from 'dayjs/plugin/utc'
 import { useEffect, useMemo, useRef, useState } from 'react'
 
 import { siteConfig } from '@/config/site'
-import { clampToSnapshotWindow, getSnapshotWindow } from '@/features/as-of/lib/snapshotWindow'
+import { getSnapshotWindow } from '@/features/as-of/lib/snapshotWindow'
+import {
+  getLiveDefaultWindow,
+  getWindowEndingAt,
+} from '@/features/observations/lib/observationWindow'
 import { getDataSourceToken } from '@/lib/dataSourceTokens'
-import { getObservationsByDatastream } from '@/services/observations'
+import {
+  getLatestObservationTime,
+  getObservationsByDatastream,
+} from '@/services/observations'
 import { Datastream, Observation, Thing } from '@/types/domain'
 
 import { getThingKey } from './utils'
@@ -49,6 +56,14 @@ export function useChartState({
   const [obsError, setObsError] = useState<string | null>(null)
   const [obsStart, setObsStart] = useState<string | null>(null)
   const [obsEnd, setObsEnd] = useState<string | null>(null)
+  // True when the As-Of window held no observations and the chart fell back to
+  // the live-mode window (the 7 days ending at the last measurement that
+  // existed at the snapshot). Purely informational — drives the modal notice.
+  const [asOfWindowFallback, setAsOfWindowFallback] = useState(false)
+  // False once the user picks a range in the date picker: their choice is then
+  // carried across selection changes untouched, exactly as in live mode. True
+  // means obsStart/obsEnd is a computed default that may be re-resolved.
+  const windowIsAutoRef = useRef(true)
   const obsCacheRef = useRef<Map<string, Observation[]>>(new Map())
   // Tracks the asOfDate context that obsStart/obsEnd + cache belong to, so a
   // range left over from a different snapshot (or from live mode) is never
@@ -88,6 +103,8 @@ export function useChartState({
     setObsLoading(false)
     setObsStart(null)
     setObsEnd(null)
+    setAsOfWindowFallback(false)
+    windowIsAutoRef.current = true
     // Cancel any pending trailing-edge refetch so it can't fire after close
     if (refetchTimerRef.current) {
       clearTimeout(refetchTimerRef.current)
@@ -115,23 +132,17 @@ export function useChartState({
     const resolvedEndpoint =
       sourceEndpoint?.trim().replace(/\/+$/, '') ?? siteConfig.api_root
 
-    if (asOfDate) {
-      // Snapshot mode: the window is strictly [asOfDate-7d, asOfDate], clamped on
-      // BOTH ends. Anything outside it belongs to a different point in time than
-      // the snapshot being viewed, so a stale range (e.g. one left over from an
-      // earlier selection in this same snapshot) must never silently pull the
-      // chart to another date — when the window is empty the user is told so
-      // instead. Clamping here makes that invariant hold for every caller.
-      const clamped = clampToSnapshotWindow(asOfDate, startIso, endIso)
-      startIso = clamped.startIso
-      endIso = clamped.endIso
-    } else if (!startIso || !endIso) {
-      // Live mode: default window is [lastObs-7d, lastObs]
-      const [, endRaw] = phenomenonTime?.split('/') ?? []
-      const end = endRaw ? dayjs.utc(endRaw) : dayjs.utc()
-      const start = end.subtract(7, 'day')
-      endIso = end.toISOString()
-      startIso = start.toISOString()
+    if (!startIso || !endIso) {
+      // No range asked for: anchor the default window on the snapshot in As-Of
+      // mode, on the datastream's last measurement in live mode. A range that
+      // IS asked for is always honoured as-is — in As-Of mode too — so the date
+      // picker behaves the same in both modes. The `$as_of` parameter below is
+      // what keeps the result a snapshot, not the width of the window.
+      const defaultWindow = asOfDate
+        ? getSnapshotWindow(asOfDate)
+        : getLiveDefaultWindow(phenomenonTime)
+      startIso = startIso ?? defaultWindow.startIso
+      endIso = endIso ?? defaultWindow.endIso
     }
 
     // Namespace cache key by asOfDate so snapshot/live results never collide
@@ -150,6 +161,58 @@ export function useChartState({
     )
     obsCacheRef.current.set(cacheKey, observationData)
     return { data: observationData, startIso, endIso }
+  }
+
+  /**
+   * The window a chart opens on in As-Of mode, for the datastream that drives
+   * the selection.
+   *
+   * Default is the snapshot window [as_of-7d, as_of] — the slice of time the
+   * snapshot is about. When that window holds no observations, showing an empty
+   * chart for a datastream that *does* have data at this snapshot is useless,
+   * so it falls back to the live-mode window: the 7 days ending at the last
+   * measurement that existed at `as_of` (found with a top-1 `$as_of` probe, so
+   * it never reaches past the snapshot into data written later).
+   *
+   * When the datastream has no observations at all at this point in time, the
+   * snapshot window is kept and the modal shows its "no data" notice.
+   */
+  const resolveAsOfDefaultWindow = async (
+    asOf: string,
+    datastreamId: string,
+    phenomenonTime?: string,
+    sourceEndpoint?: string
+  ) => {
+    const snapshotWindow = getSnapshotWindow(asOf)
+    const resolvedEndpoint =
+      sourceEndpoint?.trim().replace(/\/+$/, '') ?? siteConfig.api_root
+
+    try {
+      const probe = await fetchObservations(
+        datastreamId,
+        phenomenonTime,
+        { start: snapshotWindow.startIso, end: snapshotWindow.endIso },
+        resolvedEndpoint
+      )
+      if (probe.data.length > 0) {
+        return { ...snapshotWindow, isFallback: false }
+      }
+
+      const sourceToken = getDataSourceToken(resolvedEndpoint)
+      const latest = await getLatestObservationTime(
+        sourceToken ?? token ?? undefined,
+        datastreamId,
+        resolvedEndpoint,
+        asOf
+      )
+      if (!latest) return { ...snapshotWindow, isFallback: false }
+
+      return { ...getWindowEndingAt(latest), isFallback: true }
+    } catch {
+      // A failing probe must never block the chart — open on the snapshot
+      // window and let the real fetch below report the error.
+      return { ...snapshotWindow, isFallback: false }
+    }
   }
 
   const loadPrimaryObservations = async (
@@ -317,6 +380,39 @@ export function useChartState({
     const primaryId = String(
       primaryDatastream?.['@iot.id'] ?? primaryDatastream?.id ?? ''
     ).trim()
+    const primaryEndpoint = String(
+      primaryDatastream?.__sourceEndpoint ??
+        primaryThing?.__sourceEndpoint ??
+        siteConfig.api_root
+    )
+
+    // A range the user picked in the date picker is carried over untouched — in
+    // As-Of mode as much as in live mode. Only a *computed* default is
+    // re-resolved for this selection, and only in As-Of mode, where it may fall
+    // back to the live-mode window (see resolveAsOfDefaultWindow). Live mode
+    // keeps carrying whatever range is on screen, as it always has.
+    const explicitRange =
+      rangeOverride?.start && rangeOverride?.end
+        ? { start: rangeOverride.start, end: rangeOverride.end }
+        : !rangeOverride && !windowIsAutoRef.current && obsStart && obsEnd
+          ? { start: obsStart, end: obsEnd }
+          : null
+    windowIsAutoRef.current = !explicitRange
+
+    let fetchRange: { start?: string | null; end?: string | null } =
+      explicitRange ?? rangeOverride ?? { start: obsStart, end: obsEnd }
+    let fallbackApplied = false
+    if (!explicitRange && asOfDate && primaryId) {
+      const autoWindow = await resolveAsOfDefaultWindow(
+        asOfDate,
+        primaryId,
+        primaryDatastream?.phenomenonTime,
+        primaryEndpoint
+      )
+      fetchRange = { start: autoWindow.startIso, end: autoWindow.endIso }
+      fallbackApplied = autoWindow.isFallback
+    }
+    setAsOfWindowFallback(fallbackApplied)
 
     for (const ds of datastreamCandidates) {
       const dsId = String(ds?.['@iot.id'] ?? ds?.id ?? '').trim()
@@ -327,7 +423,7 @@ export function useChartState({
       const result = await fetchObservations(
         dsId,
         ds?.phenomenonTime,
-        rangeOverride ?? { start: obsStart, end: obsEnd },
+        fetchRange,
         sourceEndpoint
       )
       nextSeries.push({ datastream: ds, observations: result.data })
@@ -368,6 +464,32 @@ export function useChartState({
   }
 
   const applyObservationRange = async (start?: string | null, end?: string | null) => {
+    const isExplicitRange = !!(start && end)
+    windowIsAutoRef.current = !isExplicitRange
+
+    // Cleared range → back to the default window for the current selection,
+    // resolved the same way the chart resolves it when it opens (in As-Of mode
+    // that includes the fallback to the live-mode window).
+    if (!isExplicitRange) {
+      setObsLoading(true)
+      try {
+        await openChartForThingAndObservedProperties(
+          selectedThingKeysForChart,
+          selectedObservedPropertyNamesForChart,
+          activeDatastreamIds[0],
+          { start: null, end: null },
+          activeDatastreamIds
+        )
+      } catch (error: unknown) {
+        setObsError(toErrorMessage(error, 'Failed to load observations'))
+      } finally {
+        setObsLoading(false)
+      }
+      return
+    }
+
+    // An explicit range is fetched exactly as asked, in both modes.
+    setAsOfWindowFallback(false)
     const dsId = String(selectedDatastream?.['@iot.id'] ?? selectedDatastream?.id ?? '')
     if (!dsId) return
     const sourceEndpoint = String(
@@ -493,13 +615,19 @@ export function useChartState({
     obsCacheRef.current.clear()
 
     // Fresh default window: [asOfDate-7d, asOfDate] in snapshot mode; in live
-    // mode leave it empty so the phenomenonTime-based default takes over.
+    // mode leave it empty so the phenomenonTime-based default takes over. Any
+    // range the user had picked belonged to the previous context, so the window
+    // goes back to being a computed default here.
+    windowIsAutoRef.current = true
+    setAsOfWindowFallback(false)
     const snapshotWindow = asOfDate ? getSnapshotWindow(asOfDate) : null
     const [nextStart, nextEnd] = snapshotWindow
       ? [snapshotWindow.startIso, snapshotWindow.endIso]
       : [null, null]
 
-    // Re-anchor the displayed range right away (fixes the stale "Time range")
+    // Re-anchor the displayed range right away (fixes the stale "Time range").
+    // The refetch below replaces it with the window actually resolved for the
+    // new snapshot, which may be the live-mode fallback window.
     setObsStart(nextStart)
     setObsEnd(nextEnd)
 
@@ -545,6 +673,7 @@ export function useChartState({
     obsError,
     obsStart,
     obsEnd,
+    asOfWindowFallback,
     activeDatastreamIds,
     setIsChartOpen,
     setSelectedDatastream,

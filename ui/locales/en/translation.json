@@ -307,6 +307,7 @@
       "snapshot_active": "Snapshot mode active — viewing data as of"
     },
     "chart": {
+      "fallback_notice": "No data in the 7 days before the snapshot — showing the latest data available as of {{date}} UTC.",
       "no_data_in_window": "No data available for this snapshot window.",
       "no_data_ends_before": "No data available for this snapshot window — this datastream's measurements end {{date}}, before it.",
       "no_data_starts_after": "No data available for this snapshot window — this datastream's measurements start {{date}}, after it."

@@ -64,6 +64,33 @@ export async function getObservationsByDatastream(
   return { observationData: values }
 }
 
+/**
+ * Timestamp of the most recent observation of a datastream, optionally as it
+ * existed at `asOfDate`. Single top-1 request — used to anchor the chart's
+ * default window when the snapshot window itself holds no observations.
+ *
+ * Returns null when the datastream has no observations at that point in time.
+ */
+export async function getLatestObservationTime(
+  token: string | null | undefined,
+  datastreamId: string,
+  apiRoot?: string,
+  asOfDate?: string | null
+): Promise<string | null> {
+  const baseRoot = (apiRoot ?? siteConfig.api_root).trim().replace(/\/+$/, '')
+  const url =
+    `${baseRoot}/Datastreams(${datastreamId})/Observations` +
+    '?$orderby=phenomenonTime desc&$top=1' +
+    (asOfDate ? `&$as_of=${encodeURIComponent(asOfDate)}` : '')
+
+  const data = await fetchData(url, token)
+  const latest = (data?.value ?? [])[0] as Observation | undefined
+  const raw = latest?.phenomenonTime ?? latest?.resultTime ?? ''
+  // phenomenonTime may be an interval ("start/end") — anchor on its end.
+  const timestamp = String(raw).split('/').pop()?.trim()
+  return timestamp || null
+}
+
 export async function getObservationsCount(token: string) {
   const [observationData] = await Promise.all([
     fetchData(`${siteConfig.api_root}/Observations?$count=true&$top=1`, token),

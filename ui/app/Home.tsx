@@ -156,6 +156,7 @@ export default function Home({
     obsError,
     obsStart,
     obsEnd,
+    asOfWindowFallback,
     activeDatastreamIds,
     setIsChartOpen,
     fetchObservations,
@@ -259,6 +260,7 @@ export default function Home({
         }}
         isSnapshot={isSnapshot}
         asOfDate={asOfDate}
+        isAsOfFallback={asOfWindowFallback}
         things={localThings}
         thing={selectedThing}
         selectedObservedPropertyName={selectedObservedPropertyName}
