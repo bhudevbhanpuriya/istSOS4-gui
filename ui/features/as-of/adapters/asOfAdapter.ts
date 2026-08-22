@@ -400,22 +400,53 @@ const apiAdapter: AsOfAdapter = {
     const endpoint = (thing.__sourceEndpoint ?? '').replace(/\/$/, '')
     if (!endpoint) return []
 
-    const payload = await postAsOf<{ ok: boolean; commits?: BackendCommit[] }>(
-      asOfCommitsApiPath,
-      { endpoint, thingId: id, token: getDataSourceToken(endpoint) }
-    )
+    const payload = await postAsOf<{
+      ok: boolean
+      commits?: BackendCommit[]
+      versions?: Array<{ start: string; end: string | null }>
+    }>(asOfCommitsApiPath, {
+      endpoint,
+      thingId: id,
+      token: getDataSourceToken(endpoint),
+    })
 
-    return (payload.commits ?? [])
-      .filter((commit) => !!commit?.date)
-      .map((commit) => ({
-        id: String(commit['@iot.id']),
-        // Backend field is `date`, our type uses `authoredAt`
-        authoredAt: commit.date,
-        message: commit.message,
-      }))
-      .sort(
-        (a, b) => dayjs.utc(a.authoredAt).valueOf() - dayjs.utc(b.authoredAt).valueOf()
-      )
+    const commits = (payload.commits ?? []).filter((commit) => !!commit?.date)
+
+    // The timeline is built from version boundaries, not from the commits
+    // collection: istSOS4 returns only the commit of the *current* version, so
+    // an edited Thing would look like it has no history before its last edit —
+    // collapsing the scrubber to the span since that edit. Each version start
+    // is a real change; a commit whose timestamp matches one lends it its
+    // message.
+    const versionTicks = (payload.versions ?? [])
+      .filter((version) => !!version?.start)
+      .map((version) => {
+        const sameSecond = commits.find(
+          (commit) =>
+            dayjs.utc(commit.date).startOf('second').valueOf() ===
+            dayjs.utc(version.start).startOf('second').valueOf()
+        )
+        return {
+          id: `v:${version.start}`,
+          authoredAt: version.start,
+          // Commit messages are free text from the backend and are not
+          // translated; this stand-in matches that.
+          message: sameSecond?.message ?? 'Changed',
+        }
+      })
+
+    const ticks = versionTicks.length
+      ? versionTicks
+      : commits.map((commit) => ({
+          id: String(commit['@iot.id']),
+          // Backend field is `date`, our type uses `authoredAt`
+          authoredAt: commit.date,
+          message: commit.message,
+        }))
+
+    return ticks.sort(
+      (a, b) => dayjs.utc(a.authoredAt).valueOf() - dayjs.utc(b.authoredAt).valueOf()
+    )
   },
 }
 

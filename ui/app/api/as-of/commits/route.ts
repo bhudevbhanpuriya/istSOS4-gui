@@ -16,6 +16,7 @@ import { NextResponse } from 'next/server'
 
 import {
   fetchThingCommits,
+  fetchThingVersions,
   resolveAuthHeaders,
   resolveConfiguredEndpoint,
 } from '@/server/as-of/read'
@@ -52,12 +53,18 @@ export async function POST(request: Request) {
 
   try {
     const headers = await resolveAuthHeaders(body?.token)
-    const commits = await fetchThingCommits(endpoint, thingId, headers)
-    return NextResponse.json({ ok: true, commits })
+    // Versions describe the timeline's real shape; commits only carry the
+    // message of the current one (see fetchThingVersions).
+    const [commits, versions] = await Promise.all([
+      fetchThingCommits(endpoint, thingId, headers),
+      fetchThingVersions(endpoint, thingId, headers),
+    ])
+    return NextResponse.json({ ok: true, commits, versions })
   } catch (error: unknown) {
     return NextResponse.json({
       ok: false,
       commits: [],
+      versions: [],
       error: error instanceof Error ? error.message : String(error),
     })
   }

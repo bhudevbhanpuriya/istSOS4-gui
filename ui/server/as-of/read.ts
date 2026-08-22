@@ -135,10 +135,90 @@ export async function fetchThingAsOf(
   return { kind: 'thing', thing: thing as Record<string, unknown> }
 }
 
+/** One version of a Thing in transaction time. `end` is null while current. */
+export type ThingVersion = {
+  start: string
+  end: string | null
+}
+
+/**
+ * A Thing's real version history, walked backwards one version at a time.
+ *
+ * `Things(id)/Commits` cannot be used for this: it returns only the commit
+ * that produced the *current* version, so an edited Thing appears to have no
+ * history before its last edit — which would collapse the timeline scrubber to
+ * the span since that edit. (`Things(id)/Commits?$as_of=…` answers 500.)
+ *
+ * Every version does, however, report its own `systemTimeValidity` when the
+ * entity is read with `$as_of`. Asking one whole second before a version began
+ * therefore lands in the previous version, and repeating that walks the chain
+ * back to creation; a 404 means there is nothing older. One second is the step
+ * because the API truncates both the timestamps it prints and the `$as_of` it
+ * parses to whole seconds.
+ *
+ * Returns oldest → newest, empty when the history cannot be read.
+ */
+export async function fetchThingVersions(
+  endpoint: string,
+  thingId: string,
+  headers: Record<string, string>,
+  maxVersions = 25
+): Promise<ThingVersion[]> {
+  const id = encodeURIComponent(thingId)
+  const versions: ThingVersion[] = []
+  // `$as_of` is required even for the current version: a plain read omits
+  // systemTimeValidity entirely.
+  let cursor = new Date().toISOString().replace(/\.\d+Z$/, 'Z')
+
+  for (let hop = 0; hop < maxVersions; hop += 1) {
+    let validity: string | null = null
+    try {
+      const response = await fetch(
+        `${endpoint}/Things(${id})?$as_of=${encodeURIComponent(cursor)}&$select=systemTimeValidity`,
+        { headers, cache: 'no-store' }
+      )
+      if (!response.ok) break
+      const data = await response.json().catch(() => null)
+      validity = typeof data?.systemTimeValidity === 'string'
+        ? data.systemTimeValidity
+        : null
+    } catch {
+      break
+    }
+
+    if (!validity) break
+    const [startRaw, endRaw] = validity.split('/')
+    const start = (startRaw ?? '').trim()
+    if (!start) break
+
+    const startMs = Date.parse(start)
+    if (!Number.isFinite(startMs)) break
+
+    versions.push({
+      start,
+      end: endRaw && endRaw.trim() && endRaw.trim() !== 'infinity'
+        ? endRaw.trim()
+        : null,
+    })
+
+    // Step one whole second before this version began to reach the previous one.
+    const previous = new Date(Math.floor(startMs / 1000) * 1000 - 1000)
+    const nextCursor = previous.toISOString().replace(/\.\d+Z$/, 'Z')
+    // Guard against a backend that never moves the window.
+    if (nextCursor >= cursor) break
+    cursor = nextCursor
+  }
+
+  return versions.reverse()
+}
+
 /**
  * A Thing's commit history (transaction-time events) — the axis `$as_of`
  * filters on. Prefers the plural `/Commits` collection and falls back to the
  * singular `/Commit` on backends that only expose the creation commit.
+ *
+ * Note this reports only the current version's commit on istSOS4; use
+ * `fetchThingVersions` for the shape of the timeline itself.
  */
 export async function fetchThingCommits(
   endpoint: string,
