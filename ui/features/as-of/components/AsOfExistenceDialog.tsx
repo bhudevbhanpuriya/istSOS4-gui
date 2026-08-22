@@ -20,6 +20,10 @@ import { Button } from '@heroui/button'
 import { useTranslation } from 'react-i18next'
 
 import { useAsOf } from '@/context/AsOfContext'
+import {
+  firstValidAsOf,
+  lastValidAsOf,
+} from '@/features/as-of/lib/existenceBounds'
 import type { ExistenceState } from '@/features/as-of/hooks/useAsOfThing'
 
 dayjs.extend(utc)
@@ -59,14 +63,14 @@ export default function AsOfExistenceDialog({
 
   const isNotYet = existenceState === 'not-yet-created'
 
-  // For 'deleted': deletedAt is the *exclusive* upper bound of the last version,
-  // so jumping exactly there would land outside valid data and re-trigger the dialog.
-  // Subtract 1 ms to land on the last valid millisecond inside the range.
-  const rawDeletedAt = existenceRange.deletedAt
-  const safeDeletedAt = rawDeletedAt
-    ? dayjs.utc(rawDeletedAt).subtract(1, 'millisecond').toISOString()
-    : null
-  const jumpTarget = isNotYet ? existenceRange.createdAt : safeDeletedAt
+  // Neither edge of the range is itself a usable `$as_of`: the creation instant
+  // is reported truncated to the second and so resolves to just *before* the
+  // data existed, and the deletion instant is the exclusive end of the range.
+  // Jumping to either would 404 and bring this dialog straight back — so step
+  // one whole second inwards (see existenceBounds).
+  const jumpTarget = isNotYet
+    ? firstValidAsOf(existenceRange.createdAt)
+    : lastValidAsOf(existenceRange.deletedAt)
 
   const headline = isNotYet
     ? t('as_of.existence.no_data_before')

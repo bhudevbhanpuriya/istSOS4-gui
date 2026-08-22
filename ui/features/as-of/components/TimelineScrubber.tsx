@@ -21,6 +21,7 @@ import { useTranslation } from 'react-i18next'
 
 import { useAsOf } from '@/context/AsOfContext'
 import { useAsOfCommits, type AsOfCommit } from '@/features/as-of/hooks/useAsOfCommits'
+import { firstValidAsOf } from '@/features/as-of/lib/existenceBounds'
 import type { Thing } from '@/types/domain'
 
 dayjs.extend(utc)
@@ -140,11 +141,13 @@ export default function TimelineScrubber({ thing }: { thing: Thing | null }) {
   const trackRef = useRef<HTMLDivElement>(null)
 
   // Timestamp bounds: [earliest data] → [now]
+  // The left bound is nudged to the first `$as_of` that actually resolves —
+  // the reported creation instant itself answers 404 (see existenceBounds).
   // When nothing is known at all, fall back to 1 year ago.
-  const firstMs = useMemo(
-    () => (firstDate ? toMs(firstDate) : toMs(lastDate) - ONE_YEAR_MS),
-    [firstDate, lastDate]
-  )
+  const firstMs = useMemo(() => {
+    const safeFirst = firstValidAsOf(firstDate)
+    return safeFirst ? toMs(safeFirst) : toMs(lastDate) - ONE_YEAR_MS
+  }, [firstDate, lastDate])
   const lastMs = useMemo(() => toMs(lastDate), [lastDate])
 
   // Clamp the current value to the slider range — if asOfDate is outside
@@ -164,10 +167,13 @@ export default function TimelineScrubber({ thing }: { thing: Thing | null }) {
     [setAsOfDate]
   )
 
-  // Jump to a specific commit date
+  // Jump to a specific commit date. A tick means "this change happened here",
+  // so land on the first instant that shows the result of the change: the
+  // commit's own second still resolves to the version it replaced, because the
+  // backend truncates both stored and requested timestamps to whole seconds.
   const jumpToCommit = useCallback(
     (commit: AsOfCommit) => {
-      setAsOfDate(commit.authoredAt)
+      setAsOfDate(firstValidAsOf(commit.authoredAt) ?? commit.authoredAt)
     },
     [setAsOfDate]
   )
