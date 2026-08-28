@@ -6,9 +6,49 @@ import {
   GraphSeriesEntry,
   resolvePrimaryAndSecondarySeries,
   withAlpha,
+  type ChangeRegion,
 } from './observationGraphUtils'
 
 dayjs.extend(utc)
+
+/** Snapshot chrome — the markLine, matching the amber As-Of badge and banner. */
+const SNAPSHOT_COLOR = '#f59e0b'
+
+/**
+ * Series B when comparing two snapshots.
+ *
+ * Amber is the As-Of mode's own colour (badge, banner, map pins, the snapshot
+ * markLine right here on this chart), so an amber *series* reads as chrome
+ * rather than as data.
+ *
+ * A light orange, chosen for how it reads against the teal primary. Separation
+ * from teal is comfortable (worst-case CVD ΔE 16.4, normal-vision 31.2), but at
+ * 2.2:1 it sits under the 3:1 floor for a mark on this white surface, so B is
+ * drawn a little heavier to stay legible. `#ea580c` is the drop-in if it ever
+ * needs to clear 3:1 on its own.
+ */
+const COMPARE_B_COLOR = '#fb923c'
+
+/**
+ * B's stroke in compare mode.
+ *
+ * B is the *reference* being checked against, so it sits under A, thinner and
+ * slightly transparent. The payoff is that agreement and disagreement look
+ * different without reading anything: where the snapshots match, B hides
+ * exactly under A and the chart shows one clean line; where they diverge, B
+ * separates out and becomes visible on its own.
+ */
+const COMPARE_B_WIDTH = 1.5
+const COMPARE_B_OPACITY = 0.9
+
+/** Wash marking spans where the two snapshots disagree. */
+const CHANGE_BAND_COLOR = '#ef4444'
+
+export type SnapshotMarker = {
+  /** x-coordinate in the axis' own space (offset ms when aligned, else epoch ms) */
+  value: number
+  label: string
+}
 
 export function buildObservationGraphOption({
   seriesEntries,
@@ -16,9 +56,12 @@ export function buildObservationGraphOption({
   primaryColor,
   t,
   onDownloadAllDatastreams,
-  snapshotDate,
+  snapshotMarkers = [],
   windowStart,
   windowEnd,
+  alignedAxis = false,
+  isCompare = false,
+  changeRegions = [],
 }: {
   seriesEntries: GraphSeriesEntry[]
   activeDatastreamIds: string[]
@@ -28,13 +71,33 @@ export function buildObservationGraphOption({
     filename: string
     bytes: ArrayBuffer
   } | null>
-  /** ISO-8601 datetime — renders an amber dashed vertical line on the chart */
-  snapshotDate?: string | null
-  /** Epoch ms — pins the x-axis to the queried window (e.g. the snapshot's
-   *  [as_of-7d, as_of]) so sparse/empty data still renders the full range and
-   *  the snapshot markLine can't stretch the axis. */
+  /** Amber dashed vertical lines. In As-Of compare mode there are two (one per
+   *  snapshot) on the real-date axis, and one (at offset 0) on the aligned axis. */
+  snapshotMarkers?: SnapshotMarker[]
+  /** Pins the x-axis to the queried window so sparse/empty data still renders
+   *  the full range and a markLine can't stretch the axis. Same space as the
+   *  axis: offset ms when `alignedAxis`, epoch ms otherwise. */
   windowStart?: number | null
   windowEnd?: number | null
+  /**
+   * As-Of compare mode, default state: each series is anchored to its own
+   * snapshot, so points are plotted as `ts - anchorTs` (−7d → 0) and two
+   * different 7-day windows lie on top of each other. Off once the user picks
+   * an explicit range — both series then share one real window.
+   */
+  alignedAxis?: boolean
+  /**
+   * As-Of compare mode. Both series are the same datastream at two snapshots:
+   * same unit, so they share ONE y-axis (dual axes would fake a difference),
+   * and the second is dashed so a perfect overlap is still readable.
+   */
+  isCompare?: boolean
+  /**
+   * Spans (epoch ms) where the two snapshots disagree, shaded so the eye lands
+   * on the change instead of scanning the series. Only ever populated on a
+   * shared window — aligned mode has no comparable timestamps.
+   */
+  changeRegions?: ChangeRegion[]
 }): echarts.EChartsOption {
   const tableBorderColor = withAlpha(primaryColor, 0.35)
   const tableHeaderBg = withAlpha(primaryColor, 0.12)
@@ -47,18 +110,26 @@ export function buildObservationGraphOption({
   const yLabel = primarySeries?.unit
     ? `${primarySeries.observedProperty} (${primarySeries.unit})`
     : (primarySeries?.observedProperty ?? '')
-  const secondaryYLabel = secondarySeries
-    ? secondarySeries.unit
-      ? `${secondarySeries.observedProperty} (${secondarySeries.unit})`
-      : secondarySeries.observedProperty
-    : ''
-  const secondaryColor = '#f59e0b'
+  // Compare mode plots one datastream at two snapshots — same observed property,
+  // same unit — so a right-hand axis would invent a distinction that isn't there.
+  const secondaryYLabel =
+    secondarySeries && !isCompare
+      ? secondarySeries.unit
+        ? `${secondarySeries.observedProperty} (${secondarySeries.unit})`
+        : secondarySeries.observedProperty
+      : ''
+  const showSecondaryAxis = !!secondarySeries && !isCompare
+  // Live property comparison keeps amber; only snapshot-vs-snapshot goes red,
+  // where amber would collide with this chart's own snapshot markLine.
+  const secondaryColor = isCompare ? COMPARE_B_COLOR : SNAPSHOT_COLOR
 
   const seriesDataRows: Array<{ date: string; stream: string; value: string }> =
     []
   for (const entry of seriesEntries) {
     for (const row of entry.rows) {
       seriesDataRows.push({
+        // Always the real timestamp — the aligned axis is a display device, the
+        // exported/tabulated data must stay in absolute time.
         date: dayjs.utc(row.ts).format('YYYY-MM-DD HH:mm'),
         stream: entry.name,
         value: entry.unit ? `${row.value} ${entry.unit}` : String(row.value),
@@ -96,6 +167,21 @@ export function buildObservationGraphOption({
             )
             const displayName = entry?.name ?? String(row?.seriesName ?? '')
             const value = Array.isArray(row?.data) ? row.data[1] : row?.value
+            // On the aligned axis the shared header is an offset ("−3d"), which
+            // is the same for both series but corresponds to a DIFFERENT real
+            // instant in each snapshot's window — so each line carries its own.
+            if (alignedAxis && entry?.anchorTs != null) {
+              const offset = Array.isArray(row?.data) ? Number(row.data[0]) : NaN
+              const realTs = Number.isFinite(offset)
+                ? entry.anchorTs + offset
+                : null
+              const stamp = realTs
+                ? ` <span style="opacity:0.65">(${dayjs
+                    .utc(realTs)
+                    .format('MMM D, HH:mm')})</span>`
+                : ''
+              return `${String(row?.marker ?? '')}${displayName}: ${value ?? ''}${stamp}`
+            }
             return `${String(row?.marker ?? '')}${displayName}: ${value ?? ''}`
           })
           .join('<br/>')
@@ -263,11 +349,16 @@ export function buildObservationGraphOption({
       ),
     },
     xAxis: {
-      type: 'time',
+      // Aligned mode plots offsets from each series' own snapshot, not instants,
+      // so the axis is a plain value scale there.
+      type: alignedAxis ? 'value' : 'time',
       ...(windowStart != null ? { min: windowStart } : {}),
       ...(windowEnd != null ? { max: windowEnd } : {}),
+      ...(alignedAxis
+        ? { name: t('as_of.chart.aligned_axis_name'), nameLocation: 'middle' as const, nameGap: 46 }
+        : {}),
       minInterval: 60 * 60 * 1000,
-      maxInterval: 60 * 60 * 1000,
+      ...(alignedAxis ? {} : { maxInterval: 60 * 60 * 1000 }),
       axisLine: {
         lineStyle: {
           color: primaryColor,
@@ -275,10 +366,17 @@ export function buildObservationGraphOption({
       },
       axisLabel: {
         hideOverlap: true,
-        rotate: 35,
+        rotate: alignedAxis ? 0 : 35,
         interval: 'auto',
         margin: 16,
         formatter: (value: number) => {
+          if (alignedAxis) {
+            // Offsets run −7d → 0; label whole days only, 0 being the snapshot.
+            const hours = Math.round(value / (60 * 60 * 1000))
+            if (hours % 24 !== 0) return ''
+            const days = hours / 24
+            return days === 0 ? '0' : `${days}d`
+          }
           const d = dayjs.utc(value)
           if (d.hour() % 6 !== 0) return ''
           return d.format('DD/MM HH:mm')
@@ -311,7 +409,7 @@ export function buildObservationGraphOption({
         nameGap: 48,
         scale: true,
         position: 'right',
-        show: !!secondarySeries,
+        show: showSecondaryAxis,
         axisLine: {
           lineStyle: {
             color: secondaryColor,
@@ -330,38 +428,71 @@ export function buildObservationGraphOption({
       return {
         name: entry.id,
         type: 'line' as const,
-        data: entry.rows.map((row) => [row.ts, row.value]),
+        data: entry.rows.map((row) => [
+          alignedAxis && entry.anchorTs != null ? row.ts - entry.anchorTs : row.ts,
+          row.value,
+        ]),
         showSymbol: false,
         sampling: 'lttb' as const,
         smooth: false,
+        // B above A. Where the two agree exactly, A's solid stroke would hide a
+        // lower B completely and the chart would claim there is only one series
+        // — indistinguishable from a comparison that failed to load. Riding B's
+        // dashes on top instead makes a perfect overlap legible AS an overlap.
+        z: isCompare && isSecondary ? 4 : 3,
         lineStyle: {
           color,
-          width: 2,
+          width: isCompare && isSecondary ? COMPARE_B_WIDTH : 2,
+          ...(isCompare && isSecondary ? { opacity: COMPARE_B_OPACITY } : {}),
+          // Compare mode: the two snapshots often agree exactly, and two solid
+          // lines at identical coordinates are indistinguishable from one. The
+          // dash lets the overlap itself be read off the chart.
+          ...(isCompare && isSecondary ? { type: 'dashed' as const } : {}),
         },
         itemStyle: {
           color,
         },
-        yAxisIndex: isSecondary ? 1 : 0,
-        // Amber dashed vertical line at the snapshot date — only in As-Of mode,
-        // drawn once on the primary series (avoids N overlapping lines/labels).
+        // Compare mode keeps both snapshots on the shared left axis.
+        yAxisIndex: isSecondary && !isCompare ? 1 : 0,
+        // Amber dashed vertical lines at the snapshot dates — drawn once on the
+        // primary series (avoids N overlapping lines/labels).
         markLine:
-          snapshotDate && isPrimary
+          snapshotMarkers.length > 0 && isPrimary
             ? {
                 silent: true,
                 symbol: 'none',
-                data: [{ xAxis: new Date(snapshotDate).getTime() }],
+                data: snapshotMarkers.map((marker) => ({
+                  xAxis: marker.value,
+                  label: {
+                    show: true,
+                    formatter: marker.label,
+                    position: 'insideStartTop' as const,
+                    color: '#b45309',
+                    fontSize: 11,
+                  },
+                })),
                 lineStyle: {
-                  color: '#f59e0b',
+                  color: SNAPSHOT_COLOR,
                   type: 'dashed' as const,
                   width: 2,
                 },
-                label: {
-                  show: true,
-                  formatter: 'Snapshot',
-                  position: 'insideStartTop' as const,
-                  color: '#b45309',
-                  fontSize: 11,
+              }
+            : undefined,
+        // Wash over the spans where the two snapshots disagree. Drawn once, on
+        // the primary series, and behind both lines so it never obscures them.
+        markArea:
+          changeRegions.length > 0 && isPrimary
+            ? {
+                silent: true,
+                itemStyle: {
+                  color: withAlpha(CHANGE_BAND_COLOR, 0.12),
+                  borderColor: withAlpha(CHANGE_BAND_COLOR, 0.35),
+                  borderWidth: 1,
                 },
+                data: changeRegions.map((region) => [
+                  { xAxis: region.start },
+                  { xAxis: region.end },
+                ]),
               }
             : undefined,
       }

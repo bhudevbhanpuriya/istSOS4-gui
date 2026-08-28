@@ -158,6 +158,9 @@ export default function Home({
     obsEnd,
     asOfWindowFallback,
     activeDatastreamIds,
+    compareAsOfDate,
+    compareAligned,
+    changeCompareAsOfDate,
     setIsChartOpen,
     fetchObservations,
     closePanel,
@@ -267,6 +270,11 @@ export default function Home({
         isSnapshot={isSnapshot}
         asOfDate={asOfDate}
         isAsOfFallback={asOfWindowFallback}
+        compareAsOfDate={compareAsOfDate}
+        compareAligned={compareAligned}
+        onCompareAsOfDateChange={(date) => {
+          void changeCompareAsOfDate(date)
+        }}
         things={localThings}
         thing={selectedThing}
         selectedObservedPropertyName={selectedObservedPropertyName}

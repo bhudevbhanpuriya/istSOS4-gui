@@ -1,24 +1,39 @@
 'use client'
 
 import { Button } from '@heroui/button'
-import { DateRangePicker } from '@heroui/date-picker'
+import { DatePicker, DateRangePicker } from '@heroui/date-picker'
 import { Modal, ModalBody, ModalContent, ModalHeader } from '@heroui/modal'
 import { Select, SelectItem } from '@heroui/select'
 import {
   getLocalTimeZone,
   parseAbsoluteToLocal,
+  toCalendarDateTime,
+  today,
 } from '@internationalized/date'
 import dayjs from 'dayjs'
 import utc from 'dayjs/plugin/utc'
+import { useMemo } from 'react'
 import { useTranslation } from 'react-i18next'
 
 dayjs.extend(utc)
 
 import { CloseIcon } from '@/components/icons'
-import { getSnapshotWindow } from '@/features/as-of/lib/snapshotWindow'
+import {
+  SNAPSHOT_WINDOW_DAYS,
+  getSnapshotWindow,
+} from '@/features/as-of/lib/snapshotWindow'
 import { Datastream, Observation, Thing } from '@/types/domain'
 
+import {
+  buildRows,
+  computeChangeRegions,
+  type ChangeRegion,
+  type SeriesSource,
+} from '../lib/observationGraphUtils'
+import type { SnapshotMarker } from '../lib/observationGraphOptions'
 import ObservationGraph from './ObservationGraph'
+
+const DAY_MS = 24 * 60 * 60 * 1000
 
 type ChartModalProps = {
   isOpen: boolean
@@ -32,7 +47,7 @@ type ChartModalProps = {
   observations?: Observation[]
   comparisonDatastream?: Datastream | null
   comparisonObservations?: Observation[]
-  allSeries?: Array<{ datastream: Datastream; observations: Observation[] }>
+  allSeries?: SeriesSource[]
   loading?: boolean
   error?: string | null
   start?: string | null
@@ -54,6 +69,17 @@ type ChartModalProps = {
    * existed at the snapshot).
    */
   isAsOfFallback?: boolean
+  /**
+   * ISO-8601 second snapshot to compare against, or null for the ordinary
+   * As-Of chart. Chart-local — it never moves the global as-of.
+   */
+  compareAsOfDate?: string | null
+  onCompareAsOfDateChange?: (date: string | null) => void
+  /**
+   * True while comparing on the aligned axis (each snapshot on its own trailing
+   * window). False once an explicit range puts both on one shared window.
+   */
+  compareAligned?: boolean
 }
 
 type DateRangeChangeValue = {
@@ -128,10 +154,35 @@ export default function ChartModal({
   isSnapshot = false,
   asOfDate = null,
   isAsOfFallback = false,
+  compareAsOfDate = null,
+  onCompareAsOfDateChange,
+  compareAligned = true,
 }: ChartModalProps) {
   const { t } = useTranslation()
-  const rangeValue = toRangeValue(start, end)
   const timeZone = getLocalTimeZone()
+  const isComparingSnapshots = isSnapshot && !!asOfDate && !!compareAsOfDate
+  // While aligned, each snapshot is on its OWN window and no shared range is in
+  // effect — so the picker shows its placeholder. Filling it with the primary
+  // snapshot's window would contradict the notice inviting the user to pick one,
+  // and re-applying those same dates would silently change mode.
+  const rangeValue =
+    isComparingSnapshots && compareAligned ? null : toRangeValue(start, end)
+  // A snapshot of the future has no meaning — the same rule the as-of picker
+  // enforces. Pinned per mount so the constraint object does not change identity
+  // on every render and reset the picker mid-edit.
+  const nowValue = useMemo(() => parseAbsoluteToLocal(new Date().toISOString()), [])
+
+  // Picking a date in the compare picker should land on midnight, not on
+  // whatever o'clock it happens to be — a snapshot at "Aug 25, 14:37" is an
+  // accident of when the user clicked, and comparing two such instants makes
+  // the boundary between them arbitrary. `toCalendarDateTime` zeroes the time,
+  // and react-aria uses this placeholder for the time part of a date chosen
+  // from the calendar. Matches the As-Of navbar picker, which already defaults
+  // to 00:00.
+  const compareTimeDefault = useMemo(
+    () => toCalendarDateTime(today(getLocalTimeZone())),
+    []
+  )
   // The default window a snapshot opens on. It is an anchor, not a bound: the
   // date picker is free to leave it, exactly as in live mode.
   const snapshotWindow = asOfDate ? getSnapshotWindow(asOfDate) : null
@@ -176,7 +227,217 @@ export default function ChartModal({
           .utc(end)
           .format('MMM D, YYYY HH:mm')} UTC`
       : null
-  const noticeMessage = snapshotNoDataMessage ?? fallbackMessage
+
+  const fmtSnapshot = (iso: string) =>
+    `${dayjs.utc(iso).format('MMM D, YYYY HH:mm')} UTC`
+
+  /**
+   * Do the two snapshots hold exactly the same measurements?
+   *
+   * Only meaningful on a shared window — on the aligned axis the two series
+   * cover different periods, so equality would say nothing. This is the notice
+   * that keeps a *correct* comparison of two unchanged snapshots from reading
+   * as a broken one: the dashed overlay alone is easy to misread as one line.
+   */
+  const compareDiff = useMemo(() => {
+    const none = { unchanged: false, regions: [] as ChangeRegion[] }
+    if (!isComparingSnapshots) return none
+
+    const primaryRows = buildRows(observations)
+    const compareRows = buildRows(comparisonObservations)
+    if (primaryRows.length === 0) return none
+
+    // Aligned mode gives each snapshot its own window, and comparing values at
+    // equal timestamps means nothing when the windows cover different dates.
+    //
+    // But they don't always: when both snapshots fall back to the same trailing
+    // range — the common case on data whose phenomenonTime predates its
+    // insertion — the two series cover exactly the same instants and the
+    // comparison is as valid as it is in shared-window mode. Gating on the dates
+    // the series actually landed on, rather than on the mode, keeps the verdict
+    // wherever it is meaningful and drops it only where it would be a guess.
+    if (compareAligned) {
+      const sameDomain =
+        primaryRows.length === compareRows.length &&
+        primaryRows[0]?.ts === compareRows[0]?.ts &&
+        primaryRows[primaryRows.length - 1]?.ts ===
+          compareRows[compareRows.length - 1]?.ts
+      if (!sameDomain) return none
+    }
+
+    return computeChangeRegions(primaryRows, compareRows)
+  }, [isComparingSnapshots, compareAligned, observations, comparisonObservations])
+
+  const compareUnchanged = compareDiff.unchanged
+
+  /**
+   * Notice stack — at most one "what am I looking at" line plus one "what is
+   * odd about the data" line, so the chart never loses more than two rows.
+   */
+  const notices = useMemo(() => {
+    const stack: Array<{ text: string; tone: 'info' | 'warn' }> = []
+    if (loading || error) return stack
+
+    if (isComparingSnapshots && asOfDate && compareAsOfDate) {
+      // ── Mode line ────────────────────────────────────────────────────────
+      stack.push({
+        tone: 'info',
+        text: compareAligned
+          ? // When a snapshot's own window was empty the chart moved to the
+            // newest data that snapshot could see, so the axis no longer ends
+            // AT the snapshot — saying otherwise would misread the dates.
+            isAsOfFallback
+            ? t('as_of.chart.compare_aligned_fallback_notice', {
+                days: SNAPSHOT_WINDOW_DAYS,
+              })
+            : t('as_of.chart.compare_aligned_notice', {
+                days: SNAPSHOT_WINDOW_DAYS,
+              })
+          : t('as_of.chart.compare_shared_notice'),
+      })
+
+      // ── Data line ────────────────────────────────────────────────────────
+      const primaryEmpty = observations.length === 0
+      const compareEmpty = comparisonObservations.length === 0
+      if (primaryEmpty && compareEmpty) {
+        stack.push({ tone: 'warn', text: t('as_of.chart.compare_no_data_both') })
+      } else if (primaryEmpty) {
+        stack.push({
+          tone: 'warn',
+          text: t('as_of.chart.compare_no_data_one', {
+            date: fmtSnapshot(asOfDate),
+          }),
+        })
+      } else if (compareEmpty) {
+        stack.push({
+          tone: 'warn',
+          text: t('as_of.chart.compare_no_data_one', {
+            date: fmtSnapshot(compareAsOfDate),
+          }),
+        })
+      } else if (compareUnchanged) {
+        stack.push({ tone: 'info', text: t('as_of.chart.compare_no_changes') })
+      } else if (!compareAligned && end) {
+        // A shared window running past the earlier snapshot cuts that series
+        // short — those measurements had not been recorded yet. That gap is the
+        // most informative part of the chart, so it is explained, not hidden.
+        //
+        // Only when one line genuinely outruns the other, though: if both stop
+        // at the same place for an unrelated reason (the datastream's own data
+        // simply ends earlier), nothing is cut off and the notice would be a
+        // confident explanation of something that is not on screen.
+        const primaryIsEarlier = dayjs
+          .utc(asOfDate)
+          .isBefore(dayjs.utc(compareAsOfDate))
+        const earliest = primaryIsEarlier ? asOfDate : compareAsOfDate
+        const laterRows = buildRows(
+          primaryIsEarlier ? comparisonObservations : observations
+        )
+        const earliestTs = dayjs.utc(earliest).valueOf()
+        const laterOutrunsEarlier = laterRows.some((row) => row.ts > earliestTs)
+        if (dayjs.utc(end).isAfter(dayjs.utc(earliest)) && laterOutrunsEarlier) {
+          stack.push({
+            tone: 'info',
+            text: t('as_of.chart.compare_cutoff', { date: fmtSnapshot(earliest) }),
+          })
+        }
+      }
+      return stack
+    }
+
+    const single = snapshotNoDataMessage ?? fallbackMessage
+    if (single) {
+      stack.push({
+        tone: snapshotNoDataMessage ? 'warn' : 'info',
+        text: single,
+      })
+    }
+    return stack
+  }, [
+    loading,
+    error,
+    isComparingSnapshots,
+    asOfDate,
+    compareAsOfDate,
+    compareAligned,
+    observations,
+    comparisonObservations,
+    compareUnchanged,
+    end,
+    snapshotNoDataMessage,
+    fallbackMessage,
+    t,
+  ])
+
+  /**
+   * Amber dashed verticals. On the aligned axis both snapshots sit at offset 0
+   * (that is what "aligned" means), so there is one marker; on a shared real
+   * window each snapshot gets its own, drawn only when it falls inside the view.
+   */
+  const snapshotMarkers = useMemo<SnapshotMarker[]>(() => {
+    if (!isSnapshot || !asOfDate) return []
+
+    if (isComparingSnapshots && compareAsOfDate) {
+      if (compareAligned) {
+        return [{ value: 0, label: t('as_of.chart.marker_snapshot') }]
+      }
+      const insideWindow = (iso: string) =>
+        !!start &&
+        !!end &&
+        !dayjs.utc(iso).isBefore(dayjs.utc(start)) &&
+        !dayjs.utc(iso).isAfter(dayjs.utc(end))
+      const markers: SnapshotMarker[] = []
+      if (insideWindow(asOfDate)) {
+        markers.push({
+          value: dayjs.utc(asOfDate).valueOf(),
+          label: t('as_of.chart.marker_primary'),
+        })
+      }
+      if (insideWindow(compareAsOfDate)) {
+        markers.push({
+          value: dayjs.utc(compareAsOfDate).valueOf(),
+          label: t('as_of.chart.marker_compare'),
+        })
+      }
+      return markers
+    }
+
+    return isAsOfInsideWindow
+      ? [
+          {
+            value: dayjs.utc(asOfDate).valueOf(),
+            label: t('as_of.chart.marker_snapshot'),
+          },
+        ]
+      : []
+  }, [
+    isSnapshot,
+    asOfDate,
+    isComparingSnapshots,
+    compareAsOfDate,
+    compareAligned,
+    start,
+    end,
+    isAsOfInsideWindow,
+    t,
+  ])
+
+  /**
+   * Axis bounds, in whatever space the axis is in. Pinning matters most when a
+   * series is empty or short: without it the chart silently rescales to the
+   * data that *is* there and the missing stretch stops being visible.
+   */
+  const axisWindow = useMemo(() => {
+    if (isComparingSnapshots && compareAligned) {
+      // Every aligned window is the same width, ending at its own snapshot.
+      return { start: -SNAPSHOT_WINDOW_DAYS * DAY_MS, end: 0 }
+    }
+    const pinToShownWindow = isComparingSnapshots || isAsOfDefaultWindow
+    if (pinToShownWindow && start && end) {
+      return { start: dayjs.utc(start).valueOf(), end: dayjs.utc(end).valueOf() }
+    }
+    return { start: null, end: null }
+  }, [isComparingSnapshots, compareAligned, isAsOfDefaultWindow, start, end])
   const thingOptions = things.map((entry) => {
     const key = `${String(entry?.__sourceId ?? entry?.__sourceEndpoint ?? '0')}::${String(
       entry?.['@iot.id'] ?? entry?.id ?? entry?.name ?? ''
@@ -255,7 +516,11 @@ export default function ChartModal({
         </ModalHeader>
         <ModalBody className="h-full overflow-hidden p-4 pt-2">
           <div className="flex h-full min-h-0 flex-col">
-            <div className="mb-4 grid w-full shrink-0 grid-cols-1 gap-3 md:grid-cols-3">
+            <div
+              className={`mb-4 grid w-full shrink-0 grid-cols-1 gap-3 md:grid-cols-2 ${
+                isSnapshot ? 'lg:grid-cols-4' : 'md:grid-cols-3'
+              }`}
+            >
             <Select
               label="Thing"
               labelPlacement="inside"
@@ -265,7 +530,11 @@ export default function ChartModal({
               size="sm"
               color="primary"
               className="w-full"
-              selectionMode="multiple"
+              // Comparing snapshots spends both comparison slots, so the chart
+              // is down to one series' worth of selection: one thing, one
+              // property, switchable but not combinable.
+              selectionMode={isComparingSnapshots ? 'single' : 'multiple'}
+              disallowEmptySelection={isComparingSnapshots}
               selectedKeys={new Set(selectedThingKeys)}
               onSelectionChange={(keys) =>
                 onThingKeysChange?.(Array.from(keys as Set<string>))
@@ -284,7 +553,8 @@ export default function ChartModal({
               size="sm"
               color="primary"
               className="w-full"
-              selectionMode="multiple"
+              selectionMode={isComparingSnapshots ? 'single' : 'multiple'}
+              disallowEmptySelection={isComparingSnapshots}
               selectedKeys={new Set(selectedObservedPropertyNames)}
               onSelectionChange={(keys) =>
                 onObservedPropertyNamesChange?.(Array.from(keys as Set<string>))
@@ -324,21 +594,104 @@ export default function ChartModal({
               color="primary"
               size="sm"
             />
+            {/* Compare-with-snapshot — As-Of mode only, so live behaviour is
+                untouched. Empty means the ordinary snapshot chart. */}
+            {isSnapshot && (
+              <div className="flex w-full items-center gap-1">
+                <DatePicker
+                  label={t('as_of.chart.compare_label')}
+                  value={
+                    (compareAsOfDate
+                      ? parseAbsoluteToLocal(compareAsOfDate)
+                      : null) as never
+                  }
+                  onChange={(value) => {
+                    const next = value as unknown as {
+                      toDate: (timeZone?: string) => Date
+                    } | null
+                    onCompareAsOfDateChange?.(
+                      next ? next.toDate(timeZone).toISOString() : null
+                    )
+                  }}
+                  maxValue={nowValue as never}
+                  placeholderValue={compareTimeDefault as never}
+                  // HeroUI pins shouldCloseOnSelect to `!hasTime`, so with a
+                  // time granularity picking a day never commits on its own —
+                  // it waits for a time that must be typed in full, and until
+                  // then choosing a date in the calendar appears to do nothing.
+                  // The calendar's own onChange is mergeable (HeroUI chains
+                  // `on*` handlers), so the date is committed here at midnight.
+                  // The popover stays open afterwards, so a time can still be
+                  // set when a same-day comparison needs one.
+                  calendarProps={
+                    {
+                      onChange: (date: unknown) => {
+                        const day = date as Parameters<
+                          typeof toCalendarDateTime
+                        >[0] | null
+                        if (!day) return
+                        onCompareAsOfDateChange?.(
+                          toCalendarDateTime(day)
+                            .toDate(timeZone)
+                            .toISOString()
+                        )
+                      },
+                    } as never
+                  }
+                  granularity="minute"
+                  // The picker reads local time while the snapshot badge and
+                  // every notice speak UTC. Echoing the UTC instant keeps the
+                  // two from being silently confused for one another.
+                  description={
+                    compareAsOfDate ? fmtSnapshot(compareAsOfDate) : undefined
+                  }
+                  variant="bordered"
+                  className="min-w-0 flex-1"
+                  showMonthAndYearPickers
+                  hideTimeZone
+                  color="primary"
+                  size="sm"
+                />
+                {compareAsOfDate && (
+                  <Button
+                    isIconOnly
+                    size="sm"
+                    variant="light"
+                    radius="sm"
+                    className="shrink-0"
+                    aria-label={t('as_of.chart.compare_clear')}
+                    title={t('as_of.chart.compare_clear')}
+                    onPress={() => onCompareAsOfDateChange?.(null)}
+                  >
+                    <CloseIcon size={16} />
+                  </Button>
+                )}
+              </div>
+            )}
             </div>
-            {noticeMessage && (
+            {notices.map((notice, index) => (
               <div
+                key={notice.text}
                 className="mb-2 flex shrink-0 items-start gap-2 rounded px-3 py-2 text-xs"
                 role="status"
                 style={{
-                  background: 'rgba(251,191,36,0.12)',
-                  border: '1px solid rgba(251,191,36,0.4)',
-                  color: '#b45309',
+                  background:
+                    notice.tone === 'warn'
+                      ? 'rgba(251,191,36,0.12)'
+                      : 'rgba(148,163,184,0.12)',
+                  border:
+                    notice.tone === 'warn'
+                      ? '1px solid rgba(251,191,36,0.4)'
+                      : '1px solid rgba(148,163,184,0.35)',
+                  color: notice.tone === 'warn' ? '#b45309' : '#475569',
                 }}
               >
-                <span aria-hidden>{snapshotNoDataMessage ? '⚠' : '⏱'}</span>
+                <span aria-hidden>{notice.tone === 'warn' ? '⚠' : '⏱'}</span>
                 <span>
-                  {noticeMessage}
-                  {shownWindowLabel && (
+                  {notice.text}
+                  {/* The window is restated once, on the first notice only, so
+                      the message is unambiguously tied to the dates on screen. */}
+                  {index === 0 && shownWindowLabel && !compareAligned && (
                     <>
                       {' '}
                       <span className="whitespace-nowrap opacity-80">
@@ -348,7 +701,7 @@ export default function ChartModal({
                   )}
                 </span>
               </div>
-            )}
+            ))}
             <div className="min-h-0 flex-1">
               <ObservationGraph
                 thing={thing}
@@ -362,9 +715,12 @@ export default function ChartModal({
                 loading={loading}
                 error={error}
                 onDownloadAllDatastreams={onDownloadAllDatastreams}
-                snapshotDate={isAsOfInsideWindow ? asOfDate : undefined}
-                windowStart={isAsOfDefaultWindow ? start : null}
-                windowEnd={isAsOfDefaultWindow ? end : null}
+                snapshotMarkers={snapshotMarkers}
+                windowStart={axisWindow.start}
+                windowEnd={axisWindow.end}
+                alignedAxis={isComparingSnapshots && compareAligned}
+                isCompare={isComparingSnapshots}
+                changeRegions={compareDiff.regions}
                 height="100%"
               />
             </div>

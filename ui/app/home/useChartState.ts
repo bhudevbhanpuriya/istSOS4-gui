@@ -10,6 +10,11 @@ import {
 } from '@/features/observations/lib/observationWindow'
 import { getDataSourceToken } from '@/lib/dataSourceTokens'
 import {
+  datastreamIdFromSeriesId,
+  makeSeriesId,
+  type SeriesSource,
+} from '@/features/observations/lib/observationGraphUtils'
+import {
   getLatestObservationTime,
   getObservationsByDatastream,
 } from '@/services/observations'
@@ -76,9 +81,22 @@ export function useChartState({
   const [comparisonObservations, setComparisonObservations] = useState<
     Observation[]
   >([])
-  const [allSeries, setAllSeries] = useState<
-    Array<{ datastream: Datastream; observations: Observation[] }>
-  >([])
+  const [allSeries, setAllSeries] = useState<SeriesSource[]>([])
+  // ── As-Of snapshot comparison ────────────────────────────────────────────
+  // The second snapshot to compare the current one against. Null (the default)
+  // leaves every behaviour below exactly as it was. Purely chart-local: it
+  // never touches the global asOfDate, so map, table and scrubber stay put.
+  const [compareAsOfDate, setCompareAsOfDate] = useState<string | null>(null)
+  // Mirror of compareAsOfDate for the async loaders below. They read it in the
+  // same tick it changes, before React has re-rendered, so the state value in
+  // their closure would still be the previous one.
+  const compareAsOfRef = useRef<string | null>(null)
+  // True while comparing on the *aligned* axis: each snapshot shows its own
+  // 7 days ending at itself, laid on top of each other by offset. Flips to
+  // false the moment the user picks an explicit range, which puts both
+  // snapshots on one shared real window (the revision view).
+  const [compareAligned, setCompareAligned] = useState(true)
+  const isComparingSnapshots = !!asOfDate && !!compareAsOfDate
 
   const selectedThing = useMemo(() => {
     if (!selectedThingId) return null
@@ -104,6 +122,9 @@ export function useChartState({
     setObsStart(null)
     setObsEnd(null)
     setAsOfWindowFallback(false)
+    compareAsOfRef.current = null
+    setCompareAsOfDate(null)
+    setCompareAligned(true)
     windowIsAutoRef.current = true
     // Cancel any pending trailing-edge refetch so it can't fire after close
     if (refetchTimerRef.current) {
@@ -125,12 +146,17 @@ export function useChartState({
     datastreamId: string,
     phenomenonTime?: string,
     range?: { start?: string | null; end?: string | null },
-    sourceEndpoint?: string
+    sourceEndpoint?: string,
+    // Compare mode reads ONE datastream at TWO snapshots, so the snapshot can
+    // no longer be implied by the hook's asOfDate — it is named per fetch.
+    // Undefined (not null) means "use the current asOfDate".
+    asOfOverride?: string | null
   ) => {
     let startIso = range?.start ?? null
     let endIso = range?.end ?? null
     const resolvedEndpoint =
       sourceEndpoint?.trim().replace(/\/+$/, '') ?? siteConfig.api_root
+    const effectiveAsOf = asOfOverride !== undefined ? asOfOverride : asOfDate
 
     if (!startIso || !endIso) {
       // No range asked for: anchor the default window on the snapshot in As-Of
@@ -138,15 +164,17 @@ export function useChartState({
       // IS asked for is always honoured as-is — in As-Of mode too — so the date
       // picker behaves the same in both modes. The `$as_of` parameter below is
       // what keeps the result a snapshot, not the width of the window.
-      const defaultWindow = asOfDate
-        ? getSnapshotWindow(asOfDate)
+      const defaultWindow = effectiveAsOf
+        ? getSnapshotWindow(effectiveAsOf)
         : getLiveDefaultWindow(phenomenonTime)
       startIso = startIso ?? defaultWindow.startIso
       endIso = endIso ?? defaultWindow.endIso
     }
 
-    // Namespace cache key by asOfDate so snapshot/live results never collide
-    const cacheKey = `${resolvedEndpoint}|${datastreamId}|${startIso}|${endIso}|${asOfDate ?? 'live'}`
+    // Namespace cache key by the snapshot actually queried, so the two halves
+    // of a comparison (same datastream, same window, different `$as_of`) get
+    // separate entries instead of the second reading back the first.
+    const cacheKey = `${resolvedEndpoint}|${datastreamId}|${startIso}|${endIso}|${effectiveAsOf ?? 'live'}`
     const cached = obsCacheRef.current.get(cacheKey)
     if (cached) return { data: cached, startIso, endIso }
 
@@ -157,7 +185,7 @@ export function useChartState({
       startIso ?? undefined,
       endIso ?? undefined,
       resolvedEndpoint,
-      asOfDate ?? null
+      effectiveAsOf ?? null
     )
     obsCacheRef.current.set(cacheKey, observationData)
     return { data: observationData, startIso, endIso }
@@ -264,6 +292,132 @@ export function useChartState({
       sourceEndpoint
     )
     setComparisonObservations(result.data)
+  }
+
+  /**
+   * As-Of comparison: read ONE datastream at BOTH snapshots and install the
+   * result as the chart's two series.
+   *
+   * Two window regimes, matching the two things a user can mean:
+   *
+   *  - **aligned** (no explicit range) — each snapshot reads its own
+   *    `[snapshot-7d, snapshot]`. Neither side can come back empty for the
+   *    trivial reason that its data had not been recorded yet, and the aligned
+   *    x-axis lays the two windows on top of one another by offset.
+   *  - **explicit range** — both snapshots read the SAME real window. This is
+   *    the revision view: whatever differs is a correction, a late arrival or
+   *    a deletion that happened between the two snapshots.
+   *
+   * The empty-window fallback that plain As-Of mode applies is deliberately
+   * NOT used here. It re-anchors a window to the last measurement, which would
+   * silently leave the two series on different windows — a comparison that
+   * looks fine and means nothing. An empty side is surfaced as a notice instead.
+   */
+  const loadCompareSnapshots = async (
+    primaryDs: Datastream | null,
+    compareDate: string,
+    range?: { start?: string | null; end?: string | null }
+  ) => {
+    if (!asOfDate || !primaryDs) return
+    const dsId = String(primaryDs?.['@iot.id'] ?? primaryDs?.id ?? '').trim()
+    if (!dsId) return
+
+    const sourceEndpoint = String(
+      primaryDs?.__sourceEndpoint ??
+        selectedThing?.__sourceEndpoint ??
+        siteConfig.api_root
+    )
+    const hasExplicitRange = !!(range?.start && range?.end)
+
+    // Aligned mode gives each snapshot its OWN trailing window, resolved the
+    // same way a single-snapshot As-Of chart resolves its default: the literal
+    // [snapshot-7d, snapshot], or — when that comes up empty — the last 7 days
+    // of data that existed at that snapshot.
+    //
+    // The fallback is what makes this comparison work at all on data whose
+    // phenomenonTime predates its insertion. `$as_of` is a SYSTEM time while the
+    // window is applied to PHENOMENON time, so for such data no snapshot exists
+    // whose literal preceding 7 days hold anything: before insertion the rows do
+    // not exist, and after it they are already older than the window. Without
+    // the fallback both series are permanently empty.
+    const [primaryWindow, compareWindow] = hasExplicitRange
+      ? [null, null]
+      : await Promise.all([
+          resolveAsOfDefaultWindow(
+            asOfDate,
+            dsId,
+            primaryDs?.phenomenonTime,
+            sourceEndpoint
+          ),
+          resolveAsOfDefaultWindow(
+            compareDate,
+            dsId,
+            primaryDs?.phenomenonTime,
+            sourceEndpoint
+          ),
+        ])
+
+    const windowFor = (snapshot: string) => {
+      if (hasExplicitRange) return { start: range?.start, end: range?.end }
+      const own = snapshot === asOfDate ? primaryWindow : compareWindow
+      return { start: own?.startIso, end: own?.endIso }
+    }
+
+    const [primaryResult, compareResult] = await Promise.all([
+      fetchObservations(
+        dsId,
+        primaryDs?.phenomenonTime,
+        windowFor(asOfDate),
+        sourceEndpoint,
+        asOfDate
+      ),
+      fetchObservations(
+        dsId,
+        primaryDs?.phenomenonTime,
+        windowFor(compareDate),
+        sourceEndpoint,
+        compareDate
+      ),
+    ])
+
+    setSelectedDatastream(primaryDs)
+    setComparisonDatastream(primaryDs)
+    setObservations(primaryResult.data)
+    setComparisonObservations(compareResult.data)
+    setAllSeries([
+      {
+        datastream: primaryDs,
+        observations: primaryResult.data,
+        asOf: asOfDate,
+        // Anchor the aligned axis at each window's END rather than at the
+        // snapshot itself: when a window fell back to older data, its points sit
+        // weeks before the snapshot, and only the end lines the two windows up.
+        anchorIso: primaryWindow?.endIso ?? asOfDate,
+      },
+      {
+        datastream: primaryDs,
+        observations: compareResult.data,
+        asOf: compareDate,
+        anchorIso: compareWindow?.endIso ?? compareDate,
+      },
+    ])
+    // Both snapshots are always active — comparison has exactly two slots and
+    // they are both spoken for, so the legend cannot add a third.
+    setActiveDatastreamIds([
+      makeSeriesId(dsId, asOfDate),
+      makeSeriesId(dsId, compareDate),
+    ])
+    setCompareAligned(!hasExplicitRange)
+    // Either snapshot falling back is worth saying: the axis no longer ends at
+    // the snapshot instant, it ends at the newest data that snapshot could see.
+    setAsOfWindowFallback(
+      !!primaryWindow?.isFallback || !!compareWindow?.isFallback
+    )
+    // The displayed range tracks the *primary* snapshot's window in both
+    // regimes; while aligned, the second snapshot's window is its own mirror
+    // of it and the modal's notice says so.
+    setObsStart(primaryResult.startIso)
+    setObsEnd(primaryResult.endIso)
   }
 
   const loadAllDatastreamObservationsForThing = async (
@@ -399,6 +553,19 @@ export function useChartState({
           : null
     windowIsAutoRef.current = !explicitRange
 
+    // As-Of comparison replaces the multi-datastream fetch entirely: one
+    // datastream read at two snapshots. All the selection bookkeeping above
+    // still applies — only what is fetched behind the chart differs.
+    const activeCompareDate = compareAsOfRef.current
+    if (asOfDate && activeCompareDate && primaryDatastream) {
+      await loadCompareSnapshots(
+        primaryDatastream,
+        activeCompareDate,
+        explicitRange ?? undefined
+      )
+      return
+    }
+
     let fetchRange: { start?: string | null; end?: string | null } =
       explicitRange ?? rangeOverride ?? { start: obsStart, end: obsEnd }
     let fallbackApplied = false
@@ -467,6 +634,27 @@ export function useChartState({
     const isExplicitRange = !!(start && end)
     windowIsAutoRef.current = !isExplicitRange
 
+    // While comparing snapshots the range is what decides WHICH comparison the
+    // user is looking at: cleared means each snapshot on its own trailing
+    // window (aligned), set means both on one shared window (revisions).
+    const activeCompareDate = compareAsOfRef.current
+    if (asOfDate && activeCompareDate && selectedDatastream) {
+      setObsLoading(true)
+      setObsError(null)
+      try {
+        await loadCompareSnapshots(
+          selectedDatastream,
+          activeCompareDate,
+          isExplicitRange ? { start, end } : undefined
+        )
+      } catch (error: unknown) {
+        setObsError(toErrorMessage(error, 'Failed to load observations'))
+      } finally {
+        setObsLoading(false)
+      }
+      return
+    }
+
     // Cleared range → back to the default window for the current selection,
     // resolved the same way the chart resolves it when it opens (in As-Of mode
     // that includes the fallback to the live-mode window).
@@ -476,7 +664,7 @@ export function useChartState({
         await openChartForThingAndObservedProperties(
           selectedThingKeysForChart,
           selectedObservedPropertyNamesForChart,
-          activeDatastreamIds[0],
+          datastreamIdFromSeriesId(activeDatastreamIds[0] ?? ''),
           { start: null, end: null },
           activeDatastreamIds
         )
@@ -519,7 +707,63 @@ export function useChartState({
     }
   }
 
+  /**
+   * Turn snapshot comparison on (an ISO datetime) or off (null).
+   *
+   * Switching it on collapses the selection to a single thing + observed
+   * property: the chart has exactly two comparison slots and both are now
+   * spent on snapshots. Switching it off restores ordinary As-Of behaviour —
+   * multi-select, default window and empty-window fallback included.
+   */
+  const changeCompareAsOfDate = async (nextDate: string | null) => {
+    compareAsOfRef.current = nextDate
+    setCompareAsOfDate(nextDate)
+
+    // Whatever window is on screen when comparison is switched on stays in
+    // effect — including one resolved automatically (the As-Of default or the
+    // empty-window fallback). It is the period the user is already looking at,
+    // and blanking the range box at the very moment they pick a compare date
+    // reads as the chart throwing their view away.
+    //
+    // So comparison opens on a shared window and can answer "what changed here"
+    // straight away. Aligned mode — each snapshot on its own trailing window —
+    // stays reachable by clearing the range, which is a deliberate act rather
+    // than a side effect of turning comparison on.
+    const keptRange =
+      obsStart && obsEnd ? { start: obsStart, end: obsEnd } : null
+    setCompareAligned(!keptRange)
+    windowIsAutoRef.current = !keptRange
+
+    const preferredId = datastreamIdFromSeriesId(activeDatastreamIds[0] ?? '')
+    // Both slots go to snapshots, so only the primary thing/property survives.
+    const thingKeys = nextDate
+      ? selectedThingKeysForChart.slice(0, 1)
+      : selectedThingKeysForChart
+    const observedPropertyNames = nextDate
+      ? selectedObservedPropertyNamesForChart.slice(0, 1)
+      : selectedObservedPropertyNamesForChart
+
+    setObsLoading(true)
+    setObsError(null)
+    try {
+      await openChartForThingAndObservedProperties(
+        thingKeys,
+        observedPropertyNames,
+        preferredId,
+        keptRange ?? { start: null, end: null }
+      )
+    } catch (error: unknown) {
+      setObsError(toErrorMessage(error, 'Failed to load observations'))
+    } finally {
+      setObsLoading(false)
+    }
+  }
+
   const changeActiveDatastreams = async (nextDatastreamIds: string[]) => {
+    // Comparing snapshots fills both slots by definition — the legend can
+    // toggle visibility but must not re-assign what is being compared.
+    if (compareAsOfRef.current) return
+
     const normalizedIdsRaw = Array.from(
       new Set(nextDatastreamIds.map((id) => String(id).trim()).filter(Boolean))
     ).slice(0, 2)
@@ -614,11 +858,27 @@ export function useChartState({
     // Stale results must never bleed across snapshot (or live) contexts
     obsCacheRef.current.clear()
 
+    // Leaving snapshot mode ends any comparison — there is no longer a primary
+    // snapshot to compare against. Moving *between* snapshots keeps it, so the
+    // scrubber can be dragged against a pinned reference.
+    if (!asOfDate && compareAsOfRef.current) {
+      compareAsOfRef.current = null
+      setCompareAsOfDate(null)
+      setCompareAligned(true)
+    }
+
+    // A comparison pinned to an explicit shared window is the one case where
+    // the range must OUTLIVE a move of the primary snapshot: holding the window
+    // still while dragging the scrubber is exactly how you watch one period get
+    // revised. Everywhere else the range belonged to the context being left.
+    const carriedRange =
+      compareAsOfRef.current && !windowIsAutoRef.current && obsStart && obsEnd
+        ? { start: obsStart, end: obsEnd }
+        : null
+
     // Fresh default window: [asOfDate-7d, asOfDate] in snapshot mode; in live
-    // mode leave it empty so the phenomenonTime-based default takes over. Any
-    // range the user had picked belonged to the previous context, so the window
-    // goes back to being a computed default here.
-    windowIsAutoRef.current = true
+    // mode leave it empty so the phenomenonTime-based default takes over.
+    windowIsAutoRef.current = !carriedRange
     setAsOfWindowFallback(false)
     const snapshotWindow = asOfDate ? getSnapshotWindow(asOfDate) : null
     const [nextStart, nextEnd] = snapshotWindow
@@ -628,8 +888,10 @@ export function useChartState({
     // Re-anchor the displayed range right away (fixes the stale "Time range").
     // The refetch below replaces it with the window actually resolved for the
     // new snapshot, which may be the live-mode fallback window.
-    setObsStart(nextStart)
-    setObsEnd(nextEnd)
+    if (!carriedRange) {
+      setObsStart(nextStart)
+      setObsEnd(nextEnd)
+    }
 
     if (isChartOpen && selectedDatastream) {
       refetchTimerRef.current = setTimeout(() => {
@@ -639,8 +901,8 @@ export function useChartState({
         void openChartForThingAndObservedProperties(
           selectedThingKeysForChart,
           selectedObservedPropertyNamesForChart,
-          activeDatastreamIds[0],
-          { start: null, end: null },
+          datastreamIdFromSeriesId(activeDatastreamIds[0] ?? ''),
+          carriedRange ?? { start: null, end: null },
           activeDatastreamIds
         )
       }, 300)
@@ -675,6 +937,10 @@ export function useChartState({
     obsEnd,
     asOfWindowFallback,
     activeDatastreamIds,
+    compareAsOfDate,
+    compareAligned,
+    isComparingSnapshots,
+    changeCompareAsOfDate,
     setIsChartOpen,
     setSelectedDatastream,
     setComparisonDatastream,

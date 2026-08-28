@@ -17,11 +17,16 @@ import * as echarts from 'echarts'
 import { useEffect, useMemo, useRef } from 'react'
 import { useTranslation } from 'react-i18next'
 import { Datastream, Observation, Thing } from '@/types/domain'
-import { buildObservationGraphOption } from '../lib/observationGraphOptions'
+import {
+  buildObservationGraphOption,
+  type SnapshotMarker,
+} from '../lib/observationGraphOptions'
 import {
   buildRows,
   buildSeriesEntries,
   resolvePrimaryAndSecondarySeries,
+  type ChangeRegion,
+  type SeriesSource,
 } from '../lib/observationGraphUtils'
 
 type ObservationGraphProps = {
@@ -30,7 +35,7 @@ type ObservationGraphProps = {
   observations?: Observation[]
   comparisonDatastream?: Datastream | null
   comparisonObservations?: Observation[]
-  allSeries?: Array<{ datastream: Datastream; observations: Observation[] }>
+  allSeries?: SeriesSource[]
   activeDatastreamIds?: string[]
   onActiveDatastreamsChange?: (datastreamIds: string[]) => void
   loading?: boolean
@@ -41,12 +46,23 @@ type ObservationGraphProps = {
   } | null>
   height?: number | string
   className?: string
-  /** ISO-8601 snapshot datetime — renders an amber dashed vertical line at this point */
-  snapshotDate?: string | null
-  /** ISO-8601 window bounds — when set, pins the x-axis to exactly this range so
-   *  sparse/empty data still renders the full queried window (used in As-Of mode). */
-  windowStart?: string | null
-  windowEnd?: string | null
+  /** Amber dashed vertical lines — the snapshot(s) this chart is about. */
+  snapshotMarkers?: SnapshotMarker[]
+  /** Window bounds in the x-axis' own space (offset ms when `alignedAxis`,
+   *  epoch ms otherwise). Pins the axis so sparse/empty data still renders the
+   *  full queried window. */
+  windowStart?: number | null
+  windowEnd?: number | null
+  /** As-Of compare mode, default state — plot offsets from each series' own
+   *  snapshot so two different 7-day windows overlay. */
+  alignedAxis?: boolean
+  /** As-Of compare mode — one datastream at two snapshots: shared y-axis,
+   *  dashed second series. */
+  isCompare?: boolean
+  /** Spans (epoch ms) where the two snapshots disagree — shaded on the chart so
+   *  the eye lands on the change instead of scanning the whole series. Empty
+   *  unless comparing over a shared window. */
+  changeRegions?: ChangeRegion[]
 }
 
 export default function ObservationGraph({
@@ -63,9 +79,12 @@ export default function ObservationGraph({
   onDownloadAllDatastreams,
   className = '',
   height = '100%',
-  snapshotDate = null,
+  snapshotMarkers = [],
   windowStart = null,
   windowEnd = null,
+  alignedAxis = false,
+  isCompare = false,
+  changeRegions = [],
 }: ObservationGraphProps) {
   const { t } = useTranslation()
 
@@ -173,9 +192,12 @@ export default function ObservationGraph({
       primaryColor,
       t: (key: string) => t(key),
       onDownloadAllDatastreams,
-      snapshotDate,
-      windowStart: windowStart ? new Date(windowStart).getTime() : null,
-      windowEnd: windowEnd ? new Date(windowEnd).getTime() : null,
+      snapshotMarkers,
+      windowStart,
+      windowEnd,
+      alignedAxis,
+      isCompare,
+      changeRegions,
     })
 
     chart.clear()
@@ -236,9 +258,12 @@ export default function ObservationGraph({
     loading,
     error,
     onDownloadAllDatastreams,
-    snapshotDate,
+    snapshotMarkers,
     windowStart,
     windowEnd,
+    alignedAxis,
+    isCompare,
+    changeRegions,
     t,
   ])
 

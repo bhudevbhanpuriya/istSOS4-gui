@@ -310,7 +310,20 @@
       "fallback_notice": "No data in the 7 days before the snapshot — showing the latest data available as of {{date}} UTC.",
       "no_data_in_window": "No data available for this snapshot window.",
       "no_data_ends_before": "No data available for this snapshot window — this datastream's measurements end {{date}}, before it.",
-      "no_data_starts_after": "No data available for this snapshot window — this datastream's measurements start {{date}}, after it."
+      "no_data_starts_after": "No data available for this snapshot window — this datastream's measurements start {{date}}, after it.",
+      "compare_label": "Compare with snapshot",
+      "compare_clear": "Clear comparison",
+      "aligned_axis_name": "Time before each snapshot",
+      "marker_snapshot": "Snapshot",
+      "marker_primary": "A",
+      "marker_compare": "B",
+      "compare_aligned_notice": "Each snapshot shows its own {{days}} days ending at that snapshot — the axis is time before each one. Pick a time range to put both on the same window.",
+      "compare_aligned_fallback_notice": "Neither snapshot has data in the {{days}} days before it — each one shows the latest {{days}} days of data it could see instead, lined up end to end.",
+      "compare_shared_notice": "Both snapshots shown over the same time range — any difference is a change made to the record between them.",
+      "compare_no_changes": "No changes between the two snapshots in this window.",
+      "compare_no_data_one": "Snapshot {{date}} has no data in this window.",
+      "compare_no_data_both": "Neither snapshot has data in this window.",
+      "compare_cutoff": "Snapshot {{date}} holds no data past its own date — those measurements had not been recorded yet."
     },
     "table": {
       "read_only": "Read-only in snapshot mode"

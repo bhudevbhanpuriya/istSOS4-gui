@@ -310,7 +310,20 @@
       "fallback_notice": "Nessun dato nei 7 giorni precedenti lo snapshot — vengono mostrati gli ultimi dati disponibili alla data {{date}} UTC.",
       "no_data_in_window": "Nessun dato disponibile per questa finestra di snapshot.",
       "no_data_ends_before": "Nessun dato disponibile per questa finestra di snapshot — le misure di questo datastream terminano il {{date}}, prima di essa.",
-      "no_data_starts_after": "Nessun dato disponibile per questa finestra di snapshot — le misure di questo datastream iniziano il {{date}}, dopo di essa."
+      "no_data_starts_after": "Nessun dato disponibile per questa finestra di snapshot — le misure di questo datastream iniziano il {{date}}, dopo di essa.",
+      "compare_label": "Confronta con snapshot",
+      "compare_clear": "Annulla confronto",
+      "aligned_axis_name": "Tempo prima di ciascuno snapshot",
+      "marker_snapshot": "Snapshot",
+      "marker_primary": "A",
+      "marker_compare": "B",
+      "compare_aligned_notice": "Ogni snapshot mostra i propri {{days}} giorni precedenti — l'asse indica il tempo prima di ciascuno. Seleziona un intervallo per portarli entrambi sulla stessa finestra.",
+      "compare_aligned_fallback_notice": "Nessuno dei due snapshot ha dati nei {{days}} giorni precedenti — ciascuno mostra invece gli ultimi {{days}} giorni di dati che poteva vedere, allineati alla fine.",
+      "compare_shared_notice": "Entrambi gli snapshot sono mostrati sullo stesso intervallo — ogni differenza è una modifica ai dati avvenuta tra i due.",
+      "compare_no_changes": "Nessuna modifica tra i due snapshot in questa finestra.",
+      "compare_no_data_one": "Lo snapshot {{date}} non ha dati in questa finestra.",
+      "compare_no_data_both": "Nessuno dei due snapshot ha dati in questa finestra.",
+      "compare_cutoff": "Lo snapshot {{date}} non ha dati oltre la propria data — quelle misure non erano ancora state registrate."
     },
     "table": {
       "read_only": "Sola lettura in modalità snapshot"
