@@ -12,7 +12,7 @@ import {
 } from '@internationalized/date'
 import dayjs from 'dayjs'
 import utc from 'dayjs/plugin/utc'
-import { useMemo } from 'react'
+import { useMemo, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 
 dayjs.extend(utc)
@@ -183,6 +183,24 @@ export default function ChartModal({
     () => toCalendarDateTime(today(getLocalTimeZone())),
     []
   )
+
+  /**
+   * Which instant the Live button set, so the button can tell "comparing with
+   * live" from "comparing with a date that happens to be recent" and act as a
+   * toggle. Local to the modal: it is a property of this control, not of the
+   * comparison, and picking a date in the picker simply stops matching it.
+   */
+  const [liveCompareIso, setLiveCompareIso] = useState<string | null>(null)
+  const isLiveCompare = !!compareAsOfDate && compareAsOfDate === liveCompareIso
+
+  // `nowValue` is fixed at mount, so a "Live" comparison taken minutes later is
+  // a moment past it and the picker would flag its own value as out of range.
+  // Let the ceiling follow the value it is validating.
+  const maxCompareValue = useMemo(() => {
+    if (!compareAsOfDate) return nowValue
+    const picked = parseAbsoluteToLocal(compareAsOfDate)
+    return picked.compare(nowValue) > 0 ? picked : nowValue
+  }, [compareAsOfDate, nowValue])
   // The default window a snapshot opens on. It is an anchor, not a bound: the
   // date picker is free to leave it, exactly as in live mode.
   const snapshotWindow = asOfDate ? getSnapshotWindow(asOfDate) : null
@@ -516,11 +534,11 @@ export default function ChartModal({
         </ModalHeader>
         <ModalBody className="h-full overflow-hidden p-4 pt-2">
           <div className="flex h-full min-h-0 flex-col">
-            <div
-              className={`mb-4 grid w-full shrink-0 grid-cols-1 gap-3 md:grid-cols-2 ${
-                isSnapshot ? 'lg:grid-cols-4' : 'md:grid-cols-3'
-              }`}
-            >
+            {/* Three controls in BOTH modes. Comparison used to be a fourth
+                column here, which reflowed and narrowed every other control the
+                moment the user time-travelled; it now lives in its own strip
+                below, so this row is stable across modes. */}
+            <div className="mb-3 grid w-full shrink-0 grid-cols-1 gap-3 md:grid-cols-3">
             <Select
               label="Thing"
               labelPlacement="inside"
@@ -594,10 +612,72 @@ export default function ChartModal({
               color="primary"
               size="sm"
             />
-            {/* Compare-with-snapshot — As-Of mode only, so live behaviour is
-                untouched. Empty means the ordinary snapshot chart. */}
+            </div>
+            {/* Comparison gets its own strip instead of a fourth column.
+                As a column it was snapshot-only, so entering snapshot mode
+                reflowed and narrowed every other control; and it holds two
+                controls where the grid allowed one cell's width, leaving the
+                field that shows the longest value the narrowest on the row.
+                The amber tint is the same snapshot chrome as the navbar chip
+                and the badge above. */}
             {isSnapshot && (
-              <div className="flex w-full items-center gap-1">
+              <div
+                className="mb-3 flex w-full shrink-0 flex-wrap items-start gap-3 rounded-md px-3 py-2"
+                style={{
+                  background: 'rgba(251,191,36,0.08)',
+                  border: '1px solid rgba(251,191,36,0.25)',
+                }}
+              >
+                {/* Comparing against the present is the common case and the one
+                    the date picker serves worst — it means reading a clock and
+                    typing today's date and time. This fills the same slot in one
+                    press, and presses again to undo, so live comparison needs no
+                    separate clear control. Bordered and stretched to the row so
+                    it reads as a peer of the picker beside it, not a chip stuck
+                    onto it. */}
+                <Button
+                  size="sm"
+                  variant={isLiveCompare ? 'solid' : 'bordered'}
+                  radius="sm"
+                  color="primary"
+                  className="h-12 shrink-0 px-3"
+                  aria-pressed={isLiveCompare}
+                  aria-label={
+                    isLiveCompare
+                      ? t('as_of.chart.compare_live_stop')
+                      : t('as_of.chart.compare_live_hint')
+                  }
+                  title={
+                    isLiveCompare
+                      ? t('as_of.chart.compare_live_stop')
+                      : t('as_of.chart.compare_live_hint')
+                  }
+                  onPress={() => {
+                    if (isLiveCompare) {
+                      setLiveCompareIso(null)
+                      onCompareAsOfDateChange?.(null)
+                      return
+                    }
+                    const iso = new Date().toISOString()
+                    setLiveCompareIso(iso)
+                    onCompareAsOfDateChange?.(iso)
+                  }}
+                >
+                  <span
+                    aria-hidden="true"
+                    className="mr-1.5 inline-block h-1.5 w-1.5 shrink-0 rounded-full bg-current"
+                  />
+                  <span className="whitespace-nowrap text-xs font-semibold">
+                    {t('as_of.chart.compare_live')}
+                  </span>
+                </Button>
+                {/* The two controls fill the same slot, so a rule reads them
+                    as alternatives rather than as two separate settings. */}
+                <span
+                  aria-hidden="true"
+                  className="hidden h-12 w-px shrink-0 sm:block"
+                  style={{ background: 'rgba(251,191,36,0.35)' }}
+                />
                 <DatePicker
                   label={t('as_of.chart.compare_label')}
                   value={
@@ -613,7 +693,7 @@ export default function ChartModal({
                       next ? next.toDate(timeZone).toISOString() : null
                     )
                   }}
-                  maxValue={nowValue as never}
+                  maxValue={maxCompareValue as never}
                   placeholderValue={compareTimeDefault as never}
                   // HeroUI pins shouldCloseOnSelect to `!hasTime`, so with a
                   // time granularity picking a day never commits on its own —
@@ -646,19 +726,21 @@ export default function ChartModal({
                     compareAsOfDate ? fmtSnapshot(compareAsOfDate) : undefined
                   }
                   variant="bordered"
-                  className="min-w-0 flex-1"
+                  className="w-full sm:w-[268px]"
                   showMonthAndYearPickers
                   hideTimeZone
                   color="primary"
                   size="sm"
                 />
-                {compareAsOfDate && (
+                {/* Only for a comparison the toggle cannot undo: a date picked
+                    in the field. A live one is cleared by pressing Live again. */}
+                {compareAsOfDate && !isLiveCompare && (
                   <Button
                     isIconOnly
                     size="sm"
                     variant="light"
                     radius="sm"
-                    className="shrink-0"
+                    className="h-12 shrink-0"
                     aria-label={t('as_of.chart.compare_clear')}
                     title={t('as_of.chart.compare_clear')}
                     onPress={() => onCompareAsOfDateChange?.(null)}
@@ -668,7 +750,6 @@ export default function ChartModal({
                 )}
               </div>
             )}
-            </div>
             {notices.map((notice, index) => (
               <div
                 key={notice.text}

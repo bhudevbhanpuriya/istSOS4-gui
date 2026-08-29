@@ -323,7 +323,10 @@
       "compare_no_changes": "No changes between the two snapshots in this window.",
       "compare_no_data_one": "Snapshot {{date}} has no data in this window.",
       "compare_no_data_both": "Neither snapshot has data in this window.",
-      "compare_cutoff": "Snapshot {{date}} holds no data past its own date — those measurements had not been recorded yet."
+      "compare_cutoff": "Snapshot {{date}} holds no data past its own date — those measurements had not been recorded yet.",
+      "compare_live": "Compare with Live",
+      "compare_live_hint": "Compare this snapshot with the data as it is now",
+      "compare_live_stop": "Stop comparing with live data"
     },
     "table": {
       "read_only": "Read-only in snapshot mode"
