@@ -70,7 +70,7 @@ export async function POST(request: Request) {
         ok: true,
         status: 404,
         thing: null,
-        commits: result.commits,
+        versions: result.versions,
       })
     }
 

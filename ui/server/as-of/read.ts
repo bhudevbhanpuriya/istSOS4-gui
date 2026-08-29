@@ -86,15 +86,15 @@ export async function resolveAuthHeaders(
 export type ThingAsOfResult =
   /** The Thing as it existed at that instant. */
   | { kind: 'thing'; thing: Record<string, unknown> }
-  /** The Thing did not exist then; commits say whether it was before or after. */
-  | { kind: 'missing'; commits: BackendCommit[] }
+  /** The Thing did not exist then; versions say whether it was before or after. */
+  | { kind: 'missing'; versions: ThingVersion[] }
   | { kind: 'error'; status: number; error: string }
 
 /**
  * A Thing as it existed at `asOfDate`, expanded for the datastream table.
  *
  * A 404 means the Thing did not exist at that point in transaction time; the
- * commit history is returned with it so the caller can tell "not yet created"
+ * version history is returned with it so the caller can tell "not yet created"
  * from "deleted" without a second round trip.
  */
 export async function fetchThingAsOf(
@@ -111,8 +111,8 @@ export async function fetchThingAsOf(
   const response = await fetch(url, { headers, cache: 'no-store' })
 
   if (response.status === 404) {
-    const commits = await fetchThingCommits(endpoint, thingId, headers)
-    return { kind: 'missing', commits }
+    const versions = await fetchThingVersions(endpoint, thingId, headers)
+    return { kind: 'missing', versions }
   }
 
   if (!response.ok) {
@@ -135,30 +135,113 @@ export async function fetchThingAsOf(
   return { kind: 'thing', thing: thing as Record<string, unknown> }
 }
 
-/** One version of a Thing in transaction time. `end` is null while current. */
+/**
+ * One version of a Thing in transaction time. `end` is null while current,
+ * `commit` is the commit that produced this version (null on a backend that
+ * cannot report it).
+ */
 export type ThingVersion = {
   start: string
   end: string | null
+  commit: BackendCommit | null
 }
 
 /**
- * A Thing's real version history, walked backwards one version at a time.
+ * Transaction-time window wide enough to contain every version ever written.
  *
- * `Things(id)/Commits` cannot be used for this: it returns only the commit
- * that produced the *current* version, so an edited Thing appears to have no
- * history before its last edit — which would collapse the timeline scrubber to
- * the span since that edit. (`Things(id)/Commits?$as_of=…` answers 500.)
+ * `$from_to` selects the versions whose validity *overlaps* the window, so any
+ * window containing all of recorded history returns the complete chain. It is a
+ * constant rather than "now" so the API can cache the response; unlike `$as_of`
+ * (which rejects future instants) `$from_to` puts no ceiling on its bounds.
+ */
+const FULL_HISTORY_WINDOW = '1970-01-01T00:00:00Z/2099-01-01T00:00:00Z'
+
+/** Splits a `systemTimeValidity` range into its two ends, `infinity` -> null. */
+function parseValidity(
+  validity: unknown
+): { start: string; end: string | null } | null {
+  if (typeof validity !== 'string') return null
+  const [startRaw, endRaw] = validity.split('/')
+  const start = (startRaw ?? '').trim()
+  if (!start || !Number.isFinite(Date.parse(start))) return null
+  const end = (endRaw ?? '').trim()
+  return { start, end: end && end !== 'infinity' ? end : null }
+}
+
+/**
+ * A Thing's complete version history, each version carrying its own commit.
  *
- * Every version does, however, report its own `systemTimeValidity` when the
- * entity is read with `$as_of`. Asking one whole second before a version began
- * therefore lands in the previous version, and repeating that walks the chain
- * back to creation; a 404 means there is nothing older. One second is the step
- * because the API truncates both the timestamps it prints and the `$as_of` it
- * parses to whole seconds.
+ * `Things(id)/Commits` cannot be used for this: it navigates the *current*
+ * `Thing` row, whose single `commit_id` an UPDATE overwrites — so an edited
+ * Thing appears to have no history before its last edit, and a deleted one has
+ * no row at all. (`Things(id)/Commits?$as_of=…` answers 500: `$as_of` appends
+ * `TravelTime` to the main entity, and `Commit` is not a versioned table.)
+ *
+ * The history lives in the `Thing_traveltime` view instead, where every version
+ * keeps the `commit_id` in effect for it. `$from_to` reads that view, returning
+ * one row per version ordered oldest → newest, and `$expand=Commit` attaches
+ * each version's own commit — so the whole timeline arrives in one request.
+ *
+ * `$expand` must be the SINGULAR `Commit`: the plural is rejected, as is any
+ * other expand, and both come back as a 500 rather than a 4xx.
  *
  * Returns oldest → newest, empty when the history cannot be read.
  */
 export async function fetchThingVersions(
+  endpoint: string,
+  thingId: string,
+  headers: Record<string, string>
+): Promise<ThingVersion[]> {
+  const url =
+    `${endpoint}/Things(${encodeURIComponent(thingId)})` +
+    `?$from_to=${encodeURIComponent(FULL_HISTORY_WINDOW)}` +
+    `&$expand=Commit` +
+    `&$select=systemTimeValidity`
+
+  let rows: unknown[] = []
+  try {
+    const response = await fetch(url, { headers, cache: 'no-store' })
+    // A backend without versioning enabled has no systemTimeValidity column and
+    // rejects $from_to outright; fall back to reading versions one at a time.
+    if (!response.ok) {
+      return walkThingVersions(endpoint, thingId, headers)
+    }
+    const data = await response.json().catch(() => null)
+    rows = Array.isArray(data?.value) ? data.value : []
+  } catch {
+    return walkThingVersions(endpoint, thingId, headers)
+  }
+
+  const versions: ThingVersion[] = []
+  for (const row of rows) {
+    const record = row as Record<string, unknown>
+    const range = parseValidity(record?.systemTimeValidity)
+    if (!range) continue
+    const commit = record?.Commit as BackendCommit | undefined
+    versions.push({
+      ...range,
+      commit: commit && commit['@iot.id'] != null ? commit : null,
+    })
+  }
+
+  // Ordering is the API's (id, systemTimeValidity ASC), but the scrubber depends
+  // on it, so do not take it on trust.
+  return versions.sort((a, b) => Date.parse(a.start) - Date.parse(b.start))
+}
+
+/**
+ * Fallback history walk for backends where `$from_to` is unavailable.
+ *
+ * Every version reports its own `systemTimeValidity` when read with `$as_of`,
+ * so asking one whole second before a version began lands in the previous one,
+ * and repeating that walks the chain back to creation; a 404 means there is
+ * nothing older. One second is the step because the API truncates both the
+ * timestamps it prints and the `$as_of` it parses to whole seconds.
+ *
+ * Commit messages are not reachable this way — `$as_of` cannot expand them per
+ * version — so every version comes back with a null commit.
+ */
+async function walkThingVersions(
   endpoint: string,
   thingId: string,
   headers: Record<string, string>,
@@ -171,7 +254,7 @@ export async function fetchThingVersions(
   let cursor = new Date().toISOString().replace(/\.\d+Z$/, 'Z')
 
   for (let hop = 0; hop < maxVersions; hop += 1) {
-    let validity: string | null = null
+    let range: { start: string; end: string | null } | null = null
     try {
       const response = await fetch(
         `${endpoint}/Things(${id})?$as_of=${encodeURIComponent(cursor)}&$select=systemTimeValidity`,
@@ -179,30 +262,18 @@ export async function fetchThingVersions(
       )
       if (!response.ok) break
       const data = await response.json().catch(() => null)
-      validity = typeof data?.systemTimeValidity === 'string'
-        ? data.systemTimeValidity
-        : null
+      range = parseValidity(data?.systemTimeValidity)
     } catch {
       break
     }
 
-    if (!validity) break
-    const [startRaw, endRaw] = validity.split('/')
-    const start = (startRaw ?? '').trim()
-    if (!start) break
-
-    const startMs = Date.parse(start)
-    if (!Number.isFinite(startMs)) break
-
-    versions.push({
-      start,
-      end: endRaw && endRaw.trim() && endRaw.trim() !== 'infinity'
-        ? endRaw.trim()
-        : null,
-    })
+    if (!range) break
+    versions.push({ ...range, commit: null })
 
     // Step one whole second before this version began to reach the previous one.
-    const previous = new Date(Math.floor(startMs / 1000) * 1000 - 1000)
+    const previous = new Date(
+      Math.floor(Date.parse(range.start) / 1000) * 1000 - 1000
+    )
     const nextCursor = previous.toISOString().replace(/\.\d+Z$/, 'Z')
     // Guard against a backend that never moves the window.
     if (nextCursor >= cursor) break
@@ -213,12 +284,14 @@ export async function fetchThingVersions(
 }
 
 /**
- * A Thing's commit history (transaction-time events) — the axis `$as_of`
- * filters on. Prefers the plural `/Commits` collection and falls back to the
- * singular `/Commit` on backends that only expose the creation commit.
+ * Last-resort commit read for a Thing: the plural `/Commits` collection,
+ * falling back to the singular `/Commit`.
  *
- * Note this reports only the current version's commit on istSOS4; use
- * `fetchThingVersions` for the shape of the timeline itself.
+ * On istSOS4 this yields only the *current* version's commit, so it cannot
+ * describe a timeline — `fetchThingVersions` is the source for that, and every
+ * version it returns already carries its own commit. This is called only when
+ * that returns nothing at all, so a scrubber on an unversioned backend still
+ * has one tick rather than none.
  */
 export async function fetchThingCommits(
   endpoint: string,

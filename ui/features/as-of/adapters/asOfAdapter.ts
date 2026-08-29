@@ -313,32 +313,50 @@ function withSourceMeta(resolved: Thing, live: Thing): Thing {
   return { ...resolved, ...meta, Datastreams: datastreams }
 }
 
+/** One version of a Thing in transaction time, as the as-of routes return it. */
+type BackendVersion = {
+  start: string
+  end: string | null
+  commit: BackendCommit | null
+}
+
 /**
- * Derive a Thing's existence range from its COMMIT history — i.e. transaction
+ * Derive a Thing's existence range from its VERSION history — i.e. transaction
  * time, which is the axis `$as_of` filters on. This is the correct source for
  * "not-yet-created vs deleted", unlike phenomenonTime (when measurements were
  * taken), which can be years off from when the row was actually written.
+ *
+ * The versions come from the `Thing_traveltime` view, which retains a deleted
+ * Thing's rows — so unlike the commits collection (which reads the current
+ * table, and is empty once a Thing is gone) this can actually observe a
+ * deletion. The last version's closed `end` IS the instant the Thing stopped
+ * existing; a trailing DELETE commit is the coarser cross-check behind it.
  */
-function existenceRangeFromCommits(commits: BackendCommit[]): {
+function existenceRangeFromVersions(versions: BackendVersion[]): {
   createdAt: string | null
   deletedAt: string | null
 } {
-  if (commits.length === 0) return { createdAt: null, deletedAt: null }
-  const sorted = [...commits].sort(
-    (a, b) => dayjs.utc(a.date).valueOf() - dayjs.utc(b.date).valueOf()
+  if (versions.length === 0) return { createdAt: null, deletedAt: null }
+  const sorted = [...versions].sort(
+    (a, b) => dayjs.utc(a.start).valueOf() - dayjs.utc(b.start).valueOf()
   )
-  const createdAt = sorted[0]?.date ?? null
-  const deleteCommit = [...sorted]
-    .reverse()
-    .find((c) => String(c.actionType).toUpperCase() === 'DELETE')
-  return { createdAt, deletedAt: deleteCommit?.date ?? null }
+  const last = sorted[sorted.length - 1]
+  const deletedByCommit =
+    String(last.commit?.actionType ?? '').toUpperCase() === 'DELETE'
+      ? (last.commit?.date ?? null)
+      : null
+  return {
+    createdAt: sorted[0]?.start ?? null,
+    // A still-current version has an open end; only a closed one is a deletion.
+    deletedAt: last.end ?? deletedByCommit,
+  }
 }
 
 type ThingAsOfResponse = {
   ok: boolean
   status?: number
   thing?: Thing | null
-  commits?: BackendCommit[]
+  versions?: BackendVersion[]
   error?: string
 }
 
@@ -366,13 +384,13 @@ const apiAdapter: AsOfAdapter = {
 
     if (payload.status === 404) {
       // The backend returns 404 when the thing didn't exist at that time.
-      // Determine "not-yet-created vs deleted" from the COMMIT history
+      // Determine "not-yet-created vs deleted" from the VERSION history
       // (transaction time — the axis $as_of filters on), NOT phenomenonTime.
-      // Falls back to phenomenonTime only when no commit history is available.
-      const commits = payload.commits ?? []
+      // Falls back to phenomenonTime only when no version history is available.
+      const versions = payload.versions ?? []
       const existenceRange =
-        commits.length > 0
-          ? existenceRangeFromCommits(commits)
+        versions.length > 0
+          ? existenceRangeFromVersions(versions)
           : inferExistenceRange(thing)
       const target = dayjs.utc(asOfDate)
       const createdAt = existenceRange.createdAt
@@ -403,46 +421,43 @@ const apiAdapter: AsOfAdapter = {
     const payload = await postAsOf<{
       ok: boolean
       commits?: BackendCommit[]
-      versions?: Array<{ start: string; end: string | null }>
+      versions?: BackendVersion[]
     }>(asOfCommitsApiPath, {
       endpoint,
       thingId: id,
       token: getDataSourceToken(endpoint),
     })
 
-    const commits = (payload.commits ?? []).filter((commit) => !!commit?.date)
-
     // The timeline is built from version boundaries, not from the commits
-    // collection: istSOS4 returns only the commit of the *current* version, so
-    // an edited Thing would look like it has no history before its last edit —
-    // collapsing the scrubber to the span since that edit. Each version start
-    // is a real change; a commit whose timestamp matches one lends it its
-    // message.
+    // collection: istSOS4's `/Commits` returns only the commit of the *current*
+    // version, so an edited Thing would look like it has no history before its
+    // last edit — collapsing the scrubber to the span since that edit. Each
+    // version start is a real change, and carries the commit that made it.
     const versionTicks = (payload.versions ?? [])
       .filter((version) => !!version?.start)
-      .map((version) => {
-        const sameSecond = commits.find(
-          (commit) =>
-            dayjs.utc(commit.date).startOf('second').valueOf() ===
-            dayjs.utc(version.start).startOf('second').valueOf()
-        )
-        return {
-          id: `v:${version.start}`,
-          authoredAt: version.start,
-          // Commit messages are free text from the backend and are not
-          // translated; this stand-in matches that.
-          message: sameSecond?.message ?? 'Changed',
-        }
-      })
+      .map((version) => ({
+        id: version.commit?.['@iot.id'] != null
+          ? String(version.commit['@iot.id'])
+          : `v:${version.start}`,
+        // The version boundary, not the commit's own `date`: they agree for an
+        // UPDATE but the scrubber is positioned in transaction time, which is
+        // what the boundary is.
+        authoredAt: version.start,
+        // Commit messages are free text from the backend and are not
+        // translated; this stand-in matches that.
+        message: version.commit?.message ?? 'Changed',
+      }))
 
     const ticks = versionTicks.length
       ? versionTicks
-      : commits.map((commit) => ({
-          id: String(commit['@iot.id']),
-          // Backend field is `date`, our type uses `authoredAt`
-          authoredAt: commit.date,
-          message: commit.message,
-        }))
+      : (payload.commits ?? [])
+          .filter((commit) => !!commit?.date)
+          .map((commit) => ({
+            id: String(commit['@iot.id']),
+            // Backend field is `date`, our type uses `authoredAt`
+            authoredAt: commit.date,
+            message: commit.message,
+          }))
 
     return ticks.sort(
       (a, b) => dayjs.utc(a.authoredAt).valueOf() - dayjs.utc(b.authoredAt).valueOf()

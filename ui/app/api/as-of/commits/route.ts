@@ -28,9 +28,9 @@ type RequestPayload = {
 }
 
 /**
- * A Thing's commit history, read server-side for the same reason as the
+ * A Thing's version history, read server-side for the same reason as the
  * snapshot route: the API is unreachable from the browser. Feeds the timeline
- * scrubber's tick marks and the "not yet created vs deleted" decision.
+ * scrubber's tick marks, each with the commit message that explains it.
  */
 export async function POST(request: Request) {
   const body = (await request.json().catch(() => null)) as RequestPayload | null
@@ -53,12 +53,14 @@ export async function POST(request: Request) {
 
   try {
     const headers = await resolveAuthHeaders(body?.token)
-    // Versions describe the timeline's real shape; commits only carry the
-    // message of the current one (see fetchThingVersions).
-    const [commits, versions] = await Promise.all([
-      fetchThingCommits(endpoint, thingId, headers),
-      fetchThingVersions(endpoint, thingId, headers),
-    ])
+    // One request: every version of the Thing, each with the commit that
+    // produced it (see fetchThingVersions). `commits` is only read when that
+    // comes back empty, so it costs a round trip only when there is no history
+    // to show otherwise.
+    const versions = await fetchThingVersions(endpoint, thingId, headers)
+    const commits = versions.length
+      ? []
+      : await fetchThingCommits(endpoint, thingId, headers)
     return NextResponse.json({ ok: true, commits, versions })
   } catch (error: unknown) {
     return NextResponse.json({
