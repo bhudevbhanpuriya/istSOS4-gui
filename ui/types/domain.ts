@@ -1,7 +1,36 @@
+/**
+ * The commit that produced the version of a record being read.
+ *
+ * Present on any entity read with `$expand=Commit`, in live mode and under
+ * `$as_of` alike — under a snapshot it is the commit in effect at that instant,
+ * which is what makes it the answer to "why does this point read this way".
+ */
+export type RecordCommit = {
+  '@iot.id'?: string | number
+  message?: string
+  /** ISO-8601 instant the commit was written (transaction time). */
+  date?: string
+  author?: string
+  /** CREATE | UPDATE | DELETE */
+  actionType?: string
+  /** Media type of `message` — the API sends text/plain. */
+  encodingType?: string
+  '@iot.selfLink'?: string
+}
+
 export type Observation = {
   phenomenonTime?: string
   resultTime?: string
   result?: unknown
+  /**
+   * Raw `resultQuality`, exactly as the API sends it.
+   *
+   * Deliberately `unknown`: the column is untyped `jsonb`, so a number, a
+   * numeric string and an object are all shapes that reach here. Read it through
+   * `features/observations/lib/resultQuality`, never directly.
+   */
+  resultQuality?: unknown
+  Commit?: RecordCommit
 }
 
 export type ObservedPropertyRef = {

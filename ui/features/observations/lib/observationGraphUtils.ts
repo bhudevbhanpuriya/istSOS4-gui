@@ -1,15 +1,43 @@
 import dayjs from 'dayjs'
 import utc from 'dayjs/plugin/utc'
-import { Datastream, Observation } from '@/types/domain'
+import { Datastream, Observation, RecordCommit } from '@/types/domain'
+
+import {
+  classifyQuality,
+  parseResultQuality,
+  type QualityClass,
+} from './resultQuality'
 
 dayjs.extend(utc)
+
+/**
+ * One plotted point, with the commit that produced the reading behind it.
+ *
+ * `commit` is null when the backend does not report one — versioning disabled,
+ * or a record written before commits were kept. The chart must stay readable in
+ * that case, so nothing downstream may assume it is present.
+ */
+export type GraphRow = {
+  ts: number
+  value: number
+  commit: RecordCommit | null
+  /**
+   * The quality index behind this reading, or null when it carries none.
+   *
+   * Kept alongside `qualityClass` because the raw code is what someone
+   * debugging an ingest needs to see — the class is the chart's reading of it,
+   * not the record's own value.
+   */
+  quality: number | null
+  qualityClass: QualityClass
+}
 
 export type GraphSeriesEntry = {
   id: string
   name: string
   unit: string
   observedProperty: string
-  rows: Array<{ ts: number; value: number }>
+  rows: GraphRow[]
   /**
    * ISO-8601 snapshot this series was read at — set only in As-Of *compare*
    * mode, where two series share one datastream and differ only by `$as_of`.
@@ -55,6 +83,23 @@ export function makeSeriesId(datastreamId: string, asOf?: string | null) {
   return asOf ? `${id}@${asOf}` : id
 }
 
+/**
+ * x-coordinate a plotted row sits at — offset ms on the aligned axis, epoch ms
+ * everywhere else.
+ *
+ * The tooltip is handed this by ECharts and has to find the row again from it,
+ * and the click handler has to turn a pixel back into it, so all three must
+ * agree. Hence one definition rather than the same expression written out at
+ * each site.
+ */
+export function plottedX(
+  entry: Pick<GraphSeriesEntry, 'anchorTs'>,
+  ts: number,
+  alignedAxis: boolean
+) {
+  return alignedAxis && entry.anchorTs != null ? ts - entry.anchorTs : ts
+}
+
 /** The datastream id behind a (possibly snapshot-qualified) series id. */
 export function datastreamIdFromSeriesId(seriesId: string) {
   return String(seriesId ?? '').split('@')[0] ?? ''
@@ -68,26 +113,53 @@ export function formatSnapshotLabel(asOf: string) {
 /** A span of phenomenon time where two snapshots disagree. Epoch ms. */
 export type ChangeRegion = { start: number; end: number }
 
+/** What a comparison of two snapshots found. */
+export type SnapshotDiff = {
+  /**
+   * Spans where the measured VALUES differ — what the red wash shades.
+   *
+   * Quality-only differences deliberately do not produce regions: they are
+   * already legible in the stacked A/B quality lanes, and a second wash over the
+   * plot would compete with this one for the same pixels while saying something
+   * different.
+   */
+  regions: ChangeRegion[]
+  /** Readings whose value differs, or that exist in only one snapshot. */
+  valueChanged: number
+  /** Readings present in both whose quality verdict differs. */
+  qualityChanged: number
+  /** True when neither the values nor the quality moved anywhere in the window. */
+  unchanged: boolean
+}
+
 /**
  * Where two snapshots of one datastream disagree.
  *
  * Only meaningful on a SHARED window: aligned mode puts each series on its own
  * date range, so equal timestamps are not comparable and the caller must not
- * ask. A timestamp counts as changed when the values differ or when the reading
- * exists in only one snapshot (inserted or deleted between them).
+ * ask. A timestamp counts as changed when the values differ, when the quality
+ * verdict differs, or when the reading exists in only one snapshot (inserted or
+ * deleted between them).
+ *
+ * Quality is counted separately and on purpose. A QC pass rewrites
+ * `resultQuality` and leaves every `result` untouched, so a comparison that only
+ * looked at values would find nothing and report that the two snapshots agree —
+ * which is exactly wrong about the one kind of revision `$as_of` exists to show.
  *
  * Consecutive changed timestamps collapse into one region so the chart shades a
  * span rather than N stripes. Isolated points are widened to half a sample
  * interval either side — a zero-width band would paint nothing.
  */
 export function computeChangeRegions(
-  primaryRows: Array<{ ts: number; value: number }>,
-  compareRows: Array<{ ts: number; value: number }>
-): { unchanged: boolean; regions: ChangeRegion[] } {
-  const a = new Map(primaryRows.map((r) => [r.ts, r.value]))
-  const b = new Map(compareRows.map((r) => [r.ts, r.value]))
+  primaryRows: Array<{ ts: number; value: number; qualityClass?: QualityClass }>,
+  compareRows: Array<{ ts: number; value: number; qualityClass?: QualityClass }>
+): SnapshotDiff {
+  const a = new Map(primaryRows.map((r) => [r.ts, r]))
+  const b = new Map(compareRows.map((r) => [r.ts, r]))
   const stamps = [...new Set([...a.keys(), ...b.keys()])].sort((x, y) => x - y)
-  if (stamps.length === 0) return { unchanged: false, regions: [] }
+  if (stamps.length === 0) {
+    return { unchanged: false, regions: [], valueChanged: 0, qualityChanged: 0 }
+  }
 
   // Half the median gap, used to give isolated changed points a visible width.
   const gaps: number[] = []
@@ -98,9 +170,21 @@ export function computeChangeRegions(
   const regions: ChangeRegion[] = []
   let open: number | null = null
   let last = 0
+  let valueChanged = 0
+  let qualityChanged = 0
+
   for (const ts of stamps) {
-    const differs = !a.has(ts) || !b.has(ts) || a.get(ts) !== b.get(ts)
-    if (differs) {
+    const rowA = a.get(ts)
+    const rowB = b.get(ts)
+    const valueDiffers = !rowA || !rowB || rowA.value !== rowB.value
+    if (valueDiffers) valueChanged += 1
+    // Only comparable when the reading exists on both sides; a reading present
+    // in one snapshot alone is a presence change, already counted above.
+    if (rowA && rowB && rowA.qualityClass !== rowB.qualityClass) {
+      qualityChanged += 1
+    }
+
+    if (valueDiffers) {
       if (open === null) open = ts
       last = ts
     } else if (open !== null) {
@@ -110,7 +194,12 @@ export function computeChangeRegions(
   }
   if (open !== null) regions.push({ start: open - pad, end: last + pad })
 
-  return { unchanged: regions.length === 0, regions }
+  return {
+    regions,
+    valueChanged,
+    qualityChanged,
+    unchanged: valueChanged === 0 && qualityChanged === 0,
+  }
 }
 
 export function toNumber(x: unknown): number | null {
@@ -151,13 +240,26 @@ export function withAlpha(color: string, alpha: number) {
   return color
 }
 
-export function buildRows(observations: Observation[]) {
-  const rows: Array<{ ts: number; value: number }> = []
+export function buildRows(observations: Observation[]): GraphRow[] {
+  const rows: GraphRow[] = []
   for (const obs of Array.isArray(observations) ? observations : []) {
     const ts = extractTimestamp(obs)
     const value = toNumber(obs?.result)
     if (ts === null || value === null) continue
-    rows.push({ ts, value })
+    // Only kept when the expand actually returned one — an empty object would
+    // render as a commit block with every field blank.
+    const commit = obs?.Commit
+    // resultQuality already rides along on the request the chart makes: it is in
+    // the API's default $select for Observation and ObservationTravelTime alike,
+    // so a snapshot returns the quality in effect at that instant for free.
+    const quality = parseResultQuality(obs?.resultQuality)
+    rows.push({
+      ts,
+      value,
+      commit: commit && commit['@iot.id'] != null ? commit : null,
+      quality,
+      qualityClass: classifyQuality(quality),
+    })
   }
   rows.sort((a, b) => a.ts - b.ts)
   return rows
@@ -173,8 +275,8 @@ export function buildSeriesEntries({
   allSeries: SeriesSource[]
   datastream: Datastream | null
   comparisonDatastream: Datastream | null
-  chartData: Array<{ ts: number; value: number }>
-  comparisonChartData: Array<{ ts: number; value: number }>
+  chartData: GraphRow[]
+  comparisonChartData: GraphRow[]
 }): GraphSeriesEntry[] {
   if (Array.isArray(allSeries) && allSeries.length > 0) {
     return allSeries.map((entry) => {

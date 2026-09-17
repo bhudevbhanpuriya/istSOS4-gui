@@ -7,12 +7,107 @@ import {
   resolvePrimaryAndSecondarySeries,
   withAlpha,
   type ChangeRegion,
+  type GraphRow,
 } from './observationGraphUtils'
+import {
+  QUALITY_CLASSES,
+  QUALITY_COLORS,
+  QUALITY_LABEL_KEYS,
+  type QualityClass,
+  type QualitySegment,
+} from './resultQuality'
 
 dayjs.extend(utc)
 
 /** Snapshot chrome — the markLine, matching the amber As-Of badge and banner. */
 const SNAPSHOT_COLOR = '#f59e0b'
+
+/**
+ * One quality strip beneath the plot: a series' readings, collapsed into runs.
+ *
+ * `tag` is the row's left-hand label — absent in live mode (there is only one
+ * strip and the legend below names it), "A"/"B" when comparing snapshots.
+ */
+export type QualityLane = {
+  id: string
+  tag?: string
+  segments: QualitySegment[]
+}
+
+/** Series id of the strip itself, so the legend and tooltip can exclude it. */
+const QUALITY_SERIES_ID = '__quality_lane__'
+
+/** Height of one strip, and the gap between two of them. */
+const LANE_HEIGHT = 14
+const LANE_GAP = 4
+
+/**
+ * Distance from the container bottom to the plot's lower edge in the laneless
+ * chart — the band the rotated date labels and the toolbox live in. The lane
+ * block is inserted above it, and the plot gives up exactly that much height.
+ */
+const AXIS_BAND = 110
+
+/** Breathing room between the plot's lower edge and the first strip. */
+const LANE_OFFSET = 10
+
+function laneBlockHeight(laneCount: number) {
+  if (laneCount === 0) return 0
+  return laneCount * LANE_HEIGHT + (laneCount - 1) * LANE_GAP
+}
+
+/**
+ * Pin the lane grid's horizontal extent to the plot grid's.
+ *
+ * Both grids are declared with the same `left`/`right`, but only the plot grid
+ * carries a y-axis, and ECharts widens a grid to fit its axis' labels and name.
+ * The plot therefore resolves to a wider left inset than the lane — 62px against
+ * the declared 50 for a two-digit scale, ~93 for a seven-digit one — so a strip
+ * drawn at the declared inset starts left of the line it describes and every
+ * segment boundary is off by that difference.
+ *
+ * How much the axis needs depends on the rendered label text, so it cannot be
+ * computed while the option is being built. Reading the resolved rect back and
+ * re-pinning the lane to it is exact for any data and settles in a single pass:
+ * the lane grid has no axis furniture of its own, so moving it cannot change what
+ * the plot needs. Both values are insets rather than coordinates, which keeps
+ * them correct across a resize.
+ *
+ * Safe to call when there is no lane grid — it returns without touching the
+ * chart.
+ */
+export function syncLaneGridToPlotGrid(chart: echarts.EChartsType): void {
+  // `getModel`, and the `coordinateSystem` hanging off a component model, are
+  // runtime API that ECharts does not surface in its published types.
+  type GridComponent = { coordinateSystem?: { getRect?: () => Rect } }
+  type Rect = { x: number; y: number; width: number; height: number }
+  const model = (
+    chart as unknown as {
+      getModel?: () => {
+        getComponent?: (type: string, index: number) => GridComponent | undefined
+      }
+    }
+  ).getModel?.()
+
+  const plot = model?.getComponent?.('grid', 0)
+  const lane = model?.getComponent?.('grid', 1)
+  if (!plot || !lane) return
+
+  const rect = plot.coordinateSystem?.getRect?.()
+  if (!rect || !Number.isFinite(rect.x) || !Number.isFinite(rect.width)) return
+
+  const containerWidth = chart.getWidth()
+  if (!Number.isFinite(containerWidth) || containerWidth <= 0) return
+
+  const right = containerWidth - (rect.x + rect.width)
+  if (!Number.isFinite(right)) return
+
+  // An empty object for grid 0 leaves the plot exactly as laid out; only the
+  // lane moves. A merge, not `notMerge`, so the viewer's dataZoom survives.
+  chart.setOption({
+    grid: [{}, { left: rect.x, right: Math.max(right, 0) }],
+  })
+}
 
 /**
  * Series B when comparing two snapshots.
@@ -21,13 +116,16 @@ const SNAPSHOT_COLOR = '#f59e0b'
  * markLine right here on this chart), so an amber *series* reads as chrome
  * rather than as data.
  *
- * A light orange, chosen for how it reads against the teal primary. Separation
- * from teal is comfortable (worst-case CVD ΔE 16.4, normal-vision 31.2), but at
- * 2.2:1 it sits under the 3:1 floor for a mark on this white surface, so B is
- * drawn a little heavier to stay legible. `#ea580c` is the drop-in if it ever
- * needs to clear 3:1 on its own.
+ * A near-black slate, chosen for how it reads against the teal primary.
+ * Separation from teal is wide under every simulated colour-vision deficiency
+ * (worst-case ΔE 27.0, against an 8.0 floor), and on this white surface it
+ * clears the 3:1 contrast floor for a mark several times over, so B needs no
+ * extra weight to stay legible.
+ *
+ * An earlier light orange was dropped: it collided with the amber above rather
+ * than separating from it, which is the one thing this colour must not do.
  */
-const COMPARE_B_COLOR = '#fb923c'
+const COMPARE_B_COLOR = '#1e293b'
 
 /**
  * B's stroke in compare mode.
@@ -50,6 +148,91 @@ export type SnapshotMarker = {
   label: string
 }
 
+/**
+ * Series id -> the colour it is drawn in.
+ *
+ * Shared with the details rail so its dots match the lines exactly. Keeping one
+ * definition matters more than it looks: the secondary colour depends on
+ * whether this is a snapshot comparison or a property comparison, and a rail
+ * that guessed would mislabel which series it is describing.
+ */
+export function resolveSeriesColors(
+  seriesEntries: GraphSeriesEntry[],
+  activeDatastreamIds: string[],
+  primaryColor: string,
+  isCompare: boolean
+) {
+  const { primarySeries, secondarySeries } = resolvePrimaryAndSecondarySeries(
+    seriesEntries,
+    activeDatastreamIds
+  )
+  const secondaryColor = isCompare ? COMPARE_B_COLOR : SNAPSHOT_COLOR
+  const colors = new Map<string, string>()
+  for (const entry of seriesEntries) {
+    colors.set(
+      entry.id,
+      entry.id === primarySeries?.id
+        ? primaryColor
+        : entry.id === secondarySeries?.id
+          ? secondaryColor
+          : '#94a3b8'
+    )
+  }
+  return colors
+}
+
+/**
+ * The primary series' vertical lines: the amber snapshot markers, plus a teal
+ * line at the reading the details rail is currently describing.
+ *
+ * Exported because the rail's line has to move on every click, and rebuilding
+ * the whole option to move it would discard the viewer's `dataZoom` state. The
+ * component merges the result of this back onto the primary series by id
+ * instead — so both paths must produce the same shape, which is why there is
+ * one function rather than two similar literals.
+ */
+export function buildMarkLine(
+  snapshotMarkers: SnapshotMarker[],
+  selectedX: number | null,
+  primaryColor: string
+) {
+  return {
+    silent: true,
+    symbol: 'none' as const,
+    lineStyle: {
+      color: SNAPSHOT_COLOR,
+      type: 'dashed' as const,
+      width: 2,
+    },
+    data: [
+      ...snapshotMarkers.map((marker) => ({
+        xAxis: marker.value,
+        label: {
+          show: true,
+          formatter: marker.label,
+          position: 'insideStartTop' as const,
+          color: '#b45309',
+          fontSize: 11,
+        },
+      })),
+      ...(selectedX !== null
+        ? [
+            {
+              xAxis: selectedX,
+              label: { show: false },
+              lineStyle: {
+                color: primaryColor,
+                type: 'solid' as const,
+                width: 1.5,
+                opacity: 0.9,
+              },
+            },
+          ]
+        : []),
+    ],
+  }
+}
+
 export function buildObservationGraphOption({
   seriesEntries,
   activeDatastreamIds,
@@ -62,6 +245,8 @@ export function buildObservationGraphOption({
   alignedAxis = false,
   isCompare = false,
   changeRegions = [],
+  selectedX = null,
+  qualityLanes = [],
 }: {
   seriesEntries: GraphSeriesEntry[]
   activeDatastreamIds: string[]
@@ -98,6 +283,25 @@ export function buildObservationGraphOption({
    * shared window — aligned mode has no comparable timestamps.
    */
   changeRegions?: ChangeRegion[]
+  /**
+   * x-coordinate of the reading the details rail is describing, or null.
+   *
+   * Only the INITIAL value: afterwards the component merges a new markLine onto
+   * the primary series rather than rebuilding the option, so that clicking a
+   * point does not reset `dataZoom`.
+   */
+  selectedX?: number | null
+  /**
+   * Quality strips to draw beneath the plot — one per series being shown, and
+   * EMPTY when nothing in the window carries a `resultQuality`.
+   *
+   * Empty is the common case (a stock deployment stores null for every
+   * observation), and it must cost nothing: with no lanes the option below is
+   * built exactly as it was before the lane existed — one grid, one x-axis
+   * carrying its own labels. A permanently blank strip under every chart would
+   * be worse than not having the feature.
+   */
+  qualityLanes?: QualityLane[]
 }): echarts.EChartsOption {
   const tableBorderColor = withAlpha(primaryColor, 0.35)
   const tableHeaderBg = withAlpha(primaryColor, 0.12)
@@ -140,14 +344,170 @@ export function buildObservationGraphOption({
     (a, b) => dayjs.utc(a.date).valueOf() - dayjs.utc(b.date).valueOf()
   )
 
+  // ── quality lane geometry ────────────────────────────────────────────────
+  // With lanes the chart becomes two stacked grids sharing one x scale. The
+  // date labels move onto the LANE grid's axis: they belong under the bottom-
+  // most thing on screen, and left on the plot's own axis they would be drawn
+  // straight over the strips.
+  const laneCount = qualityLanes.length
+  const hasLanes = laneCount > 0
+
+  /**
+   * Plotted x → the reading there, per series, so the tooltip can name a
+   * reading's quality without rescanning every row on each hover.
+   */
+  const rowsByPlottedX = new Map<string, Map<number, GraphRow>>()
+  for (const entry of seriesEntries) {
+    const byX = new Map<number, GraphRow>()
+    for (const row of entry.rows) {
+      byX.set(
+        alignedAxis && entry.anchorTs != null ? row.ts - entry.anchorTs : row.ts,
+        row
+      )
+    }
+    rowsByPlottedX.set(entry.id, byX)
+  }
+  const laneBlock = laneBlockHeight(laneCount)
+  const plotBottom = hasLanes ? AXIS_BAND + laneBlock + LANE_OFFSET : AXIS_BAND
+
+  const xAxisScale = {
+    // Aligned mode plots offsets from each series' own snapshot, not instants,
+    // so the axis is a plain value scale there.
+    type: (alignedAxis ? 'value' : 'time') as 'value' | 'time',
+    ...(windowStart != null ? { min: windowStart } : {}),
+    ...(windowEnd != null ? { max: windowEnd } : {}),
+    minInterval: 60 * 60 * 1000,
+    ...(alignedAxis ? {} : { maxInterval: 60 * 60 * 1000 }),
+  }
+
+  const xAxisLabels = {
+    ...(alignedAxis
+      ? {
+          name: t('as_of.chart.aligned_axis_name'),
+          nameLocation: 'middle' as const,
+          nameGap: 46,
+        }
+      : {}),
+    axisLabel: {
+      hideOverlap: true,
+      rotate: alignedAxis ? 0 : 35,
+      interval: 'auto' as const,
+      margin: 16,
+      formatter: (value: number) => {
+        if (alignedAxis) {
+          // Offsets run −7d → 0; label whole days only, 0 being the snapshot.
+          const hours = Math.round(value / (60 * 60 * 1000))
+          if (hours % 24 !== 0) return ''
+          const days = hours / 24
+          return days === 0 ? '0' : `${days}d`
+        }
+        const d = dayjs.utc(value)
+        if (d.hour() % 6 !== 0) return ''
+        return d.format('DD/MM HH:mm')
+      },
+    },
+  }
+
+  const axisLine = { lineStyle: { color: primaryColor } }
+
+  /**
+   * The strips, as one custom series over the lane grid.
+   *
+   * A custom series rather than a bar or heatmap because a segment spans an
+   * arbitrary x range — it is a run of readings already collapsed by
+   * `buildQualitySegments`, so a window of 2000 points draws a handful of rects
+   * instead of 2000 abutting ones.
+   *
+   * `silent` keeps it out of hover and click handling entirely: the strip is a
+   * readout of the series above it, never a thing to select in its own right.
+   */
+  const laneSeries: echarts.CustomSeriesOption[] = hasLanes
+    ? [
+        {
+          id: QUALITY_SERIES_ID,
+          name: QUALITY_SERIES_ID,
+          type: 'custom',
+          xAxisIndex: 1,
+          yAxisIndex: 2,
+          silent: true,
+          animation: false,
+          // [ startX, endX, laneIndex, classIndex ]
+          data: qualityLanes.flatMap((lane, laneIndex) =>
+            lane.segments.map((segment) => [
+              segment.startX,
+              segment.endX,
+              laneIndex,
+              QUALITY_CLASSES.indexOf(segment.qualityClass),
+            ])
+          ),
+          encode: { x: [0, 1], y: 2 },
+          renderItem: (
+            params: echarts.CustomSeriesRenderItemParams,
+            api: echarts.CustomSeriesRenderItemAPI
+          ) => {
+            const laneIndex = Number(api.value(2))
+            const classIndex = Number(api.value(3))
+            // Lane 0 sits at the top, so it takes the highest band on an axis
+            // that runs 0..laneCount. The 0.08 inset leaves a hairline between
+            // two stacked strips without needing a separate spacer.
+            const topLeft = api.coord([
+              api.value(0),
+              laneCount - laneIndex - 0.08,
+            ])
+            const bottomRight = api.coord([
+              api.value(1),
+              laneCount - laneIndex - 0.92,
+            ])
+            const clipped = echarts.graphic.clipRectByRect(
+              {
+                x: topLeft[0],
+                y: topLeft[1],
+                // Never below a hairline: a run of one reading would otherwise
+                // be a zero-width rect and paint nothing at all.
+                width: Math.max(bottomRight[0] - topLeft[0], 1),
+                height: bottomRight[1] - topLeft[1],
+              },
+              params.coordSys as unknown as {
+                x: number
+                y: number
+                width: number
+                height: number
+              }
+            )
+            if (!clipped) return undefined
+            return {
+              type: 'rect',
+              shape: clipped,
+              style: {
+                fill:
+                  QUALITY_COLORS[
+                    (QUALITY_CLASSES[classIndex] ?? 'none') as QualityClass
+                  ],
+              },
+            }
+          },
+        },
+      ]
+    : []
+
   return {
     animation: false,
-    grid: {
-      left: 50,
-      right: 50,
-      top: 30,
-      bottom: 110,
-    },
+    // One crosshair across both grids, so hovering the plot also points at the
+    // strip below it and the two read as one chart rather than two.
+    ...(hasLanes
+      ? { axisPointer: { link: [{ xAxisIndex: 'all' }] } }
+      : {}),
+    grid: hasLanes
+      ? [
+          { left: 50, right: 50, top: 30, bottom: plotBottom },
+          { left: 50, right: 50, height: laneBlock, bottom: AXIS_BAND },
+        ]
+      : {
+          left: 50,
+          right: 50,
+          top: 30,
+          bottom: AXIS_BAND,
+        },
     tooltip: {
       trigger: 'axis',
       borderColor: primaryColor,
@@ -161,12 +521,36 @@ export function buildObservationGraphOption({
         }>
         const axisLabel = rows[0]?.axisValueLabel ?? ''
         const lines = rows
+          // The quality strip is a series to ECharts but not to the reader; it
+          // is described by the line it sits under, not listed beside it.
+          .filter((row) => String(row?.seriesName ?? '') !== QUALITY_SERIES_ID)
           .map((row) => {
             const entry = seriesEntries.find(
               (item) => item.id === String(row?.seriesName ?? '')
             )
             const displayName = entry?.name ?? String(row?.seriesName ?? '')
             const value = Array.isArray(row?.data) ? row.data[1] : row?.value
+            // Only worth a line when this window actually carries quality —
+            // otherwise every tooltip in a stock deployment would end in a
+            // "not checked" that never changes.
+            let qualityLine = ''
+            if (hasLanes && entry) {
+              const plotted = Array.isArray(row?.data) ? Number(row.data[0]) : NaN
+              const found = rowsByPlottedX.get(entry.id)?.get(plotted)
+              if (found) {
+                const swatch =
+                  `<span style="display:inline-block;width:8px;height:8px;` +
+                  `border-radius:2px;background:${QUALITY_COLORS[found.qualityClass]};` +
+                  `margin-right:5px"></span>`
+                const code =
+                  found.quality !== null
+                    ? ` <span style="opacity:0.6">${found.quality}</span>`
+                    : ''
+                qualityLine =
+                  `<br/><span style="opacity:0.85">${swatch}` +
+                  `${t(QUALITY_LABEL_KEYS[found.qualityClass])}${code}</span>`
+              }
+            }
             // On the aligned axis the shared header is an offset ("−3d"), which
             // is the same for both series but corresponds to a DIFFERENT real
             // instant in each snapshot's window — so each line carries its own.
@@ -180,13 +564,15 @@ export function buildObservationGraphOption({
                     .utc(realTs)
                     .format('MMM D, HH:mm')})</span>`
                 : ''
-              return `${String(row?.marker ?? '')}${displayName}: ${value ?? ''}${stamp}`
+              return `${String(row?.marker ?? '')}${displayName}: ${value ?? ''}${stamp}${qualityLine}`
             }
-            return `${String(row?.marker ?? '')}${displayName}: ${value ?? ''}`
+            return `${String(row?.marker ?? '')}${displayName}: ${value ?? ''}${qualityLine}`
           })
           .join('<br/>')
-        return `${axisLabel}<br/>${lines}`
+
+        return `<div>${axisLabel}</div><div>${lines}</div>`
       },
+      extraCssText: 'max-width:340px;white-space:normal;',
       axisPointer: {
         type: 'line',
         lineStyle: {
@@ -293,8 +679,18 @@ export function buildObservationGraphOption({
           },
         },
         dataZoom: {
-          xAxisIndex: 0,
-          yAxisIndex: 'none',
+          // Same pair of axes as the inside zoom, so a box drawn over the plot
+          // carries the quality strip along instead of leaving it behind.
+          xAxisIndex: hasLanes ? [0, 1] : 0,
+          // Was 'none': the box could only ever narrow the time range, so a
+          // single outlier flattening the series had no remedy. Naming the
+          // axes explicitly matters — left unset this defaults to 'all', which
+          // would sweep in the strip's own 0..laneCount scale and crush it.
+          yAxisIndex: showSecondaryAxis ? [0, 1] : 0,
+          // An axis is filtered by whichever dataZoom claims it first, and that
+          // model's filterMode is the one that applies. Matching the inside
+          // zoom's keeps the behaviour the same however the two get ordered.
+          filterMode: 'weakFilter',
           iconStyle: {
             borderColor: primaryColor,
           },
@@ -337,6 +733,10 @@ export function buildObservationGraphOption({
     },
     legend: {
       top: 0,
+      // Named explicitly so the quality strip — a series like any other as far
+      // as ECharts is concerned — cannot auto-collect into the legend and offer
+      // itself as a datastream to toggle.
+      data: seriesEntries.map((entry) => entry.id),
       formatter: (id: string) =>
         seriesEntries.find((entry) => entry.id === id)?.name ?? id,
       selected: Object.fromEntries(
@@ -348,41 +748,20 @@ export function buildObservationGraphOption({
         ])
       ),
     },
-    xAxis: {
-      // Aligned mode plots offsets from each series' own snapshot, not instants,
-      // so the axis is a plain value scale there.
-      type: alignedAxis ? 'value' : 'time',
-      ...(windowStart != null ? { min: windowStart } : {}),
-      ...(windowEnd != null ? { max: windowEnd } : {}),
-      ...(alignedAxis
-        ? { name: t('as_of.chart.aligned_axis_name'), nameLocation: 'middle' as const, nameGap: 46 }
-        : {}),
-      minInterval: 60 * 60 * 1000,
-      ...(alignedAxis ? {} : { maxInterval: 60 * 60 * 1000 }),
-      axisLine: {
-        lineStyle: {
-          color: primaryColor,
-        },
-      },
-      axisLabel: {
-        hideOverlap: true,
-        rotate: alignedAxis ? 0 : 35,
-        interval: 'auto',
-        margin: 16,
-        formatter: (value: number) => {
-          if (alignedAxis) {
-            // Offsets run −7d → 0; label whole days only, 0 being the snapshot.
-            const hours = Math.round(value / (60 * 60 * 1000))
-            if (hours % 24 !== 0) return ''
-            const days = hours / 24
-            return days === 0 ? '0' : `${days}d`
-          }
-          const d = dayjs.utc(value)
-          if (d.hour() % 6 !== 0) return ''
-          return d.format('DD/MM HH:mm')
-        },
-      },
-    },
+    xAxis: hasLanes
+      ? [
+          // Plot axis: same scale, labels suppressed — the lane grid below
+          // carries them so they sit under everything rather than over the strips.
+          {
+            ...xAxisScale,
+            gridIndex: 0,
+            axisLine,
+            axisLabel: { show: false },
+            axisTick: { show: false },
+          },
+          { ...xAxisScale, ...xAxisLabels, gridIndex: 1, axisLine },
+        ]
+      : { ...xAxisScale, ...xAxisLabels, axisLine },
     yAxis: [
       {
         type: 'value',
@@ -391,6 +770,7 @@ export function buildObservationGraphOption({
         nameGap: 42,
         scale: true,
         position: 'left',
+        gridIndex: 0,
         axisLine: {
           lineStyle: {
             color: primaryColor,
@@ -409,6 +789,7 @@ export function buildObservationGraphOption({
         nameGap: 48,
         scale: true,
         position: 'right',
+        gridIndex: 0,
         show: showSecondaryAxis,
         axisLine: {
           lineStyle: {
@@ -419,13 +800,55 @@ export function buildObservationGraphOption({
           show: false,
         },
       },
+      // The strips' own scale: one unit per lane, lane 0 at the top. Invisible —
+      // it exists to give renderItem a coordinate system, not to be read.
+      ...(hasLanes
+        ? [
+            {
+              type: 'value' as const,
+              gridIndex: 1,
+              min: 0,
+              max: laneCount,
+              show: false,
+              axisLine: { show: false },
+              axisTick: { show: false },
+              axisLabel: { show: false },
+              splitLine: { show: false },
+            },
+          ]
+        : []),
     ],
-    dataZoom: [{ type: 'inside', xAxisIndex: 0, filterMode: 'none' }],
-    series: seriesEntries.map((entry) => {
+    dataZoom: [
+      {
+        type: 'inside',
+        // Both grids zoom together, or the strip would drift out of step with
+        // the plot it describes.
+        xAxisIndex: hasLanes ? [0, 1] : 0,
+        // Zooming x drops the readings outside the window, so the y axis —
+        // `scale: true` — recomputes its extent from what is actually on
+        // screen and the line fills the plot. Under 'none' the axis kept
+        // spanning the whole series, and zooming into a quiet stretch left a
+        // flat thread across an otherwise empty chart.
+        //
+        // 'weakFilter' rather than 'filter' for the quality strip: its items
+        // carry TWO x dimensions (a run's start and end), and weakFilter keeps
+        // an item whose dimensions straddle the window on both sides. A run of
+        // uniform quality longer than the zoomed window therefore survives,
+        // where 'filter' would drop it and blank the strip exactly when the
+        // viewer zoomed in on it.
+        filterMode: 'weakFilter',
+      },
+    ],
+    series: [
+      ...seriesEntries.map((entry) => {
       const isPrimary = entry.id === primarySeries?.id
       const isSecondary = entry.id === secondarySeries?.id
       const color = isPrimary ? primaryColor : isSecondary ? secondaryColor : '#94a3b8'
       return {
+        // `id` is what lets the component merge a new markLine onto the primary
+        // series without rebuilding the option — ECharts matches series by index
+        // otherwise, which is not stable across legend changes.
+        id: entry.id,
         name: entry.id,
         type: 'line' as const,
         data: entry.rows.map((row) => [
@@ -452,32 +875,16 @@ export function buildObservationGraphOption({
         itemStyle: {
           color,
         },
+        // Always the plot grid — with lanes present, grid 1 belongs to the strips.
+        xAxisIndex: 0,
         // Compare mode keeps both snapshots on the shared left axis.
         yAxisIndex: isSecondary && !isCompare ? 1 : 0,
-        // Amber dashed vertical lines at the snapshot dates — drawn once on the
+        // Amber dashed vertical lines at the snapshot dates, plus the teal line
+        // marking the reading the details rail is describing — drawn once on the
         // primary series (avoids N overlapping lines/labels).
-        markLine:
-          snapshotMarkers.length > 0 && isPrimary
-            ? {
-                silent: true,
-                symbol: 'none',
-                data: snapshotMarkers.map((marker) => ({
-                  xAxis: marker.value,
-                  label: {
-                    show: true,
-                    formatter: marker.label,
-                    position: 'insideStartTop' as const,
-                    color: '#b45309',
-                    fontSize: 11,
-                  },
-                })),
-                lineStyle: {
-                  color: SNAPSHOT_COLOR,
-                  type: 'dashed' as const,
-                  width: 2,
-                },
-              }
-            : undefined,
+        markLine: isPrimary
+          ? buildMarkLine(snapshotMarkers, selectedX, primaryColor)
+          : undefined,
         // Wash over the spans where the two snapshots disagree. Drawn once, on
         // the primary series, and behind both lines so it never obscures them.
         markArea:
@@ -489,13 +896,19 @@ export function buildObservationGraphOption({
                   borderColor: withAlpha(CHANGE_BAND_COLOR, 0.35),
                   borderWidth: 1,
                 },
-                data: changeRegions.map((region) => [
-                  { xAxis: region.start },
-                  { xAxis: region.end },
-                ]),
+                data: changeRegions.map(
+                  (region) =>
+                    [{ xAxis: region.start }, { xAxis: region.end }] as [
+                      { xAxis: number },
+                      { xAxis: number },
+                    ]
+                ),
               }
             : undefined,
       }
-    }),
+      }),
+      ...laneSeries,
+    ],
   }
 }
+

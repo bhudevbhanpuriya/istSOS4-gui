@@ -326,7 +326,18 @@
       "compare_cutoff": "Lo snapshot {{date}} non ha dati oltre la propria data — quelle misure non erano ancora state registrate.",
       "compare_live": "Confronta con Live",
       "compare_live_hint": "Confronta questo snapshot con i dati attuali",
-      "compare_live_stop": "Interrompi il confronto con i dati attuali"
+      "compare_live_stop": "Interrompi il confronto con i dati attuali",
+      "commit": {
+        "title": "Modifica dietro questa misura",
+        "id": "Commit",
+        "none": "Nessun commit registrato per questa misura",
+        "measured": "Misurato",
+        "committed": "Registrato",
+        "by": "Da",
+        "action": "Azione"
+      },
+      "compare_quality_only": "Valori invariati — i flag di qualità sono cambiati per {{count}} letture tra questi snapshot.",
+      "compare_quality_and_values": "{{values}} letture hanno cambiato valore e {{quality}} hanno cambiato flag di qualità tra questi snapshot."
     },
     "table": {
       "read_only": "Sola lettura in modalità snapshot"
@@ -398,5 +409,15 @@
       "jump_latest": "Vai al dato più recente",
       "dismiss": "Chiudi"
     }
+  },
+  "quality": {
+    "label": "Qualità",
+    "pass": "Valido",
+    "suspect": "Sospetto",
+    "outlier": "Anomalo",
+    "range": "Fuori intervallo",
+    "none": "Non verificato",
+    "summary": "{{count}} letture · {{percent}}% valide",
+    "summary_unchecked": "{{count}} letture · nessuna qualità registrata"
   }
 }

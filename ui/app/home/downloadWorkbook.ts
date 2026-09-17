@@ -5,6 +5,24 @@ import { Datastream, Observation, Thing } from '@/types/domain'
 
 dayjs.extend(utc)
 
+/**
+ * `resultQuality` as it goes into a spreadsheet cell.
+ *
+ * The column is untyped `jsonb`, so the value may be a number, a string or an
+ * object. Primitives are written through unchanged; anything structured is
+ * serialised, because a cell reading `[object Object]` loses the record.
+ */
+function formatQualityForExport(raw: unknown): string | number {
+  if (raw === null || raw === undefined) return ''
+  if (typeof raw === 'number' || typeof raw === 'string') return raw
+  if (typeof raw === 'boolean') return String(raw)
+  try {
+    return JSON.stringify(raw)
+  } catch {
+    return ''
+  }
+}
+
 export type CsvDownloadPayload = {
   filename: string
   bytes: ArrayBuffer
@@ -73,9 +91,16 @@ export async function buildDatastreamWorkbookPayload({
         .map((obs: Observation) => ({
           phenomenonTime: String(obs?.phenomenonTime ?? ''),
           result: obs?.result ?? '',
+          // The stored value, not this app's reading of it: an export is the
+          // record, so a downstream consumer gets what is actually in the
+          // column rather than a verdict derived from it under an assumed
+          // scale. Objects (the DQ_Element shape) are serialised rather than
+          // flattened to a number, which would silently discard everything the
+          // number is not.
+          resultQuality: formatQualityForExport(obs?.resultQuality),
         }))
       const sheet = XLSX.utils.json_to_sheet(rows, {
-        header: ['phenomenonTime', 'result'],
+        header: ['phenomenonTime', 'result', 'resultQuality'],
       })
       const sheetName = sanitizeSheetName(streamName, `Datastream_${index + 1}`)
       XLSX.utils.book_append_sheet(workbook, sheet, sheetName)

@@ -326,7 +326,18 @@
       "compare_cutoff": "Snapshot {{date}} holds no data past its own date — those measurements had not been recorded yet.",
       "compare_live": "Compare with Live",
       "compare_live_hint": "Compare this snapshot with the data as it is now",
-      "compare_live_stop": "Stop comparing with live data"
+      "compare_live_stop": "Stop comparing with live data",
+      "commit": {
+        "title": "Change behind this reading",
+        "id": "Commit",
+        "none": "No commit recorded for this reading",
+        "measured": "Measured",
+        "committed": "Committed",
+        "by": "By",
+        "action": "Action"
+      },
+      "compare_quality_only": "Values unchanged — quality flags changed for {{count}} readings between these snapshots.",
+      "compare_quality_and_values": "{{values}} readings changed value and {{quality}} changed quality flag between these snapshots."
     },
     "table": {
       "read_only": "Read-only in snapshot mode"
@@ -398,5 +409,15 @@
       "jump_latest": "Jump to latest data",
       "dismiss": "Dismiss"
     }
+  },
+  "quality": {
+    "label": "Quality",
+    "pass": "Pass",
+    "suspect": "Suspect",
+    "outlier": "Outlier",
+    "range": "Out of range",
+    "none": "Not checked",
+    "summary": "{{count}} readings · {{percent}}% pass",
+    "summary_unchecked": "{{count}} readings · no quality recorded"
   }
 }

@@ -258,7 +258,12 @@ export default function ChartModal({
    * as a broken one: the dashed overlay alone is easy to misread as one line.
    */
   const compareDiff = useMemo(() => {
-    const none = { unchanged: false, regions: [] as ChangeRegion[] }
+    const none = {
+      unchanged: false,
+      regions: [] as ChangeRegion[],
+      valueChanged: 0,
+      qualityChanged: 0,
+    }
     if (!isComparingSnapshots) return none
 
     const primaryRows = buildRows(observations)
@@ -335,6 +340,28 @@ export default function ChartModal({
         })
       } else if (compareUnchanged) {
         stack.push({ tone: 'info', text: t('as_of.chart.compare_no_changes') })
+      } else if (
+        compareDiff.qualityChanged > 0 &&
+        compareDiff.valueChanged === 0
+      ) {
+        // The revision a quality run makes: every measured value identical,
+        // every verdict about them rewritten. Nothing in the plotted lines shows
+        // it — without this line the chart would look like two agreeing
+        // snapshots, which is what it used to claim.
+        stack.push({
+          tone: 'info',
+          text: t('as_of.chart.compare_quality_only', {
+            count: compareDiff.qualityChanged,
+          }),
+        })
+      } else if (compareDiff.qualityChanged > 0) {
+        stack.push({
+          tone: 'info',
+          text: t('as_of.chart.compare_quality_and_values', {
+            values: compareDiff.valueChanged,
+            quality: compareDiff.qualityChanged,
+          }),
+        })
       } else if (!compareAligned && end) {
         // A shared window running past the earlier snapshot cuts that series
         // short — those measurements had not been recorded yet. That gap is the
@@ -381,6 +408,7 @@ export default function ChartModal({
     observations,
     comparisonObservations,
     compareUnchanged,
+    compareDiff,
     end,
     snapshotNoDataMessage,
     fallbackMessage,
@@ -495,7 +523,12 @@ export default function ChartModal({
       backdrop="blur"
       classNames={{
         wrapper: 'z-[6000]',
-        base: 'z-[6001] h-[62vh] min-h-[62vh] max-h-[62vh] w-[94vw] max-w-[1440px]',
+        // Pinned to 90vh rather than the old 62: everything stacked above the
+        // chart is subtracted from this one fixed budget, and in snapshot mode
+        // that is the compare strip plus up to two notices — ~160px that used
+        // to come straight out of the plot, leaving it shorter than the axis
+        // furniture around it. Matches the 94vw already used across.
+        base: 'z-[6001] h-[90vh] min-h-[480px] max-h-[90vh] w-[94vw] max-w-[1440px]',
         backdrop: 'z-[5999]',
       }}
     >

@@ -36,6 +36,11 @@ export async function getObservationsByDatastream(
   let url =
     `${baseRoot}/Datastreams(${datastreamId})/Observations` +
     '?$orderby=phenomenonTime desc' +
+    // The commit each observation carries — what the chart shows when a point
+    // is clicked. Works in live mode and under $as_of alike (a snapshot returns
+    // the commit in effect at that instant), and rides along on the request the
+    // chart already makes. Must be the SINGULAR `Commit`.
+    '&$expand=Commit' +
     (asOfDate ? `&$as_of=${encodeURIComponent(asOfDate)}` : '') +
     (filters.length ? `&$filter=${filters.join(' and ')}` : '') +
     '&$top=1440'
