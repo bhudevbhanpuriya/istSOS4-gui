@@ -111,7 +111,11 @@ export const localDummyThings: Array<
         name: 'Dummy Lugano current location',
         __sourceEndpoint: API_ROOT,
         encodingType: 'application/vnd.geo+json',
-        location: { type: 'Point', coordinates: [2717510, 1095850] },
+        location: {
+          type: 'Point',
+          coordinates: [2717510, 1095850],
+          crs: { type: 'name', properties: { name: 'EPSG:2056' } },
+        },
       },
     ],
     Datastreams: [
@@ -216,7 +220,11 @@ export const localDummyThings: Array<
         name: 'Dummy Bellinzona location',
         __sourceEndpoint: API_ROOT,
         encodingType: 'application/vnd.geo+json',
-        location: { type: 'Point', coordinates: [2722100, 1117100] },
+        location: {
+          type: 'Point',
+          coordinates: [2722100, 1117100],
+          crs: { type: 'name', properties: { name: 'EPSG:2056' } },
+        },
       },
     ],
     Datastreams: [
