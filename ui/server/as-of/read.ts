@@ -26,6 +26,7 @@
 
 import { cookies } from 'next/headers'
 
+import { parseValidity as readSystemTimeValidity } from '@/lib/systemTimeValidity'
 import {
   getPrimaryDataSource,
   readDataSourcesConfigFile,
@@ -156,16 +157,21 @@ export type ThingVersion = {
  */
 const FULL_HISTORY_WINDOW = '1970-01-01T00:00:00Z/2099-01-01T00:00:00Z'
 
-/** Splits a `systemTimeValidity` range into its two ends, `infinity` -> null. */
+/**
+ * Splits a `systemTimeValidity` range into its two ends, `infinity` -> null.
+ *
+ * Delegates to the shared reader, which the history UI uses too. Splitting on
+ * `/` here directly used to mis-read the two shapes that carry no upper bound
+ * in the usual place: a bare timestamp (a version in force for zero time, which
+ * `visitors.py` formats without a `/`) came back as `end: null` and so showed a
+ * superseded version as the current one.
+ */
 function parseValidity(
   validity: unknown
 ): { start: string; end: string | null } | null {
-  if (typeof validity !== 'string') return null
-  const [startRaw, endRaw] = validity.split('/')
-  const start = (startRaw ?? '').trim()
-  if (!start || !Number.isFinite(Date.parse(start))) return null
-  const end = (endRaw ?? '').trim()
-  return { start, end: end && end !== 'infinity' ? end : null }
+  const parsed = readSystemTimeValidity(validity)
+  if (!parsed) return null
+  return { start: parsed.start, end: parsed.end }
 }
 
 /**
