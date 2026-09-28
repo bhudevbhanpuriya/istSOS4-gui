@@ -32,10 +32,17 @@ function toErrorMessage(error: unknown, fallback: string) {
 
 export function useChartState({
   localThings,
+  liveThings,
+  thingsResolvedFor,
   token,
   asOfDate,
 }: {
+  /** The Things in view: the snapshot list in snapshot mode, else the live one. */
   localThings: Thing[]
+  /** The live list — where a Thing absent at the snapshot is still found. */
+  liveThings: Thing[]
+  /** The instant `localThings` belongs to (null when live). */
+  thingsResolvedFor: string | null
   token?: string | null
   asOfDate?: string | null
 }) {
@@ -77,6 +84,11 @@ export function useChartState({
   // Trailing-edge timer for the open-chart refetch (keeps continuous scrubber
   // dragging from firing a network request on every tick).
   const refetchTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  // Set when asOfDate moves while the chart may need refetching; consumed once
+  // the Things for the new instant have arrived.
+  const pendingChartRefetchRef = useRef<{
+    range: { start: string | null; end: string | null }
+  } | null>(null)
   const [observations, setObservations] = useState<Observation[]>([])
   const [comparisonObservations, setComparisonObservations] = useState<
     Observation[]
@@ -98,10 +110,47 @@ export function useChartState({
   const [compareAligned, setCompareAligned] = useState(true)
   const isComparingSnapshots = !!asOfDate && !!compareAsOfDate
 
-  const selectedThing = useMemo(() => {
-    if (!selectedThingId) return null
-    return localThings.find((thing) => getThingKey(thing) === selectedThingId) ?? null
-  }, [localThings, selectedThingId])
+  // The last object a selection resolved to, so a Thing that exists neither at
+  // the snapshot nor now (deleted, then scrubbed to before its creation) can
+  // stay selected and be reported, instead of the panel silently closing.
+  const retainedThingsRef = useRef<Map<string, Thing>>(new Map())
+
+  /**
+   * The Thing a key refers to in the current view. In snapshot mode a Thing
+   * that did not exist at the instant is still returned — from the live list,
+   * or as last seen — because the panel and the existence dialog must be able
+   * to say "this did not exist then". Its snapshot resolution (useAsOfThing)
+   * decides what is shown. In live mode only the live list counts: a Thing
+   * gone from it is gone.
+   */
+  const resolveThingByKey = (
+    key: string,
+    keyOf: (thing: Thing) => string = getThingKey
+  ): Thing | null => {
+    const inView = localThings.find((thing) => keyOf(thing) === key)
+    if (inView) return inView
+    if (!asOfDate) return null
+    return (
+      liveThings.find((thing) => keyOf(thing) === key) ??
+      Array.from(retainedThingsRef.current.values()).find(
+        (thing) => keyOf(thing) === key
+      ) ??
+      null
+    )
+  }
+
+  const selectedThing = useMemo(
+    () => (selectedThingId ? resolveThingByKey(selectedThingId) : null),
+    // resolveThingByKey reads exactly these values.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [localThings, liveThings, selectedThingId, asOfDate]
+  )
+
+  useEffect(() => {
+    if (selectedThing && selectedThingId) {
+      retainedThingsRef.current.set(selectedThingId, selectedThing)
+    }
+  }, [selectedThing, selectedThingId])
 
   const isPanelOpen = !!selectedThing
   const thingKeyFor = (thing: Thing) =>
@@ -474,9 +523,12 @@ export function useChartState({
     setSelectedThingKeysForChart(keys)
     setSelectedObservedPropertyNamesForChart(ops)
 
-    const selectedThingsForChart = localThings.filter((thing) =>
-      keys.includes(thingKeyFor(thing))
-    )
+    // Resolved like the panel selection, so a Thing missing at this instant
+    // stays in the chart (showing no data then) rather than dropping out and
+    // taking the selection — and the panel — with it.
+    const selectedThingsForChart = keys
+      .map((key) => resolveThingByKey(key, thingKeyFor))
+      .filter((thing): thing is Thing => !!thing)
     const primaryThing = selectedThingsForChart[0] ?? null
     setSelectedThingId(primaryThing ? getThingKey(primaryThing) : null)
     setSelectedObservedPropertyName(ops[0] ?? null)
@@ -893,19 +945,11 @@ export function useChartState({
       setObsEnd(nextEnd)
     }
 
-    if (isChartOpen && selectedDatastream) {
-      refetchTimerRef.current = setTimeout(() => {
-        // Refetch the WHOLE current selection (all things / observed properties)
-        // with a fresh null range, so every series re-anchors to the new
-        // snapshot window — not just the primary datastream.
-        void openChartForThingAndObservedProperties(
-          selectedThingKeysForChart,
-          selectedObservedPropertyNamesForChart,
-          datastreamIdFromSeriesId(activeDatastreamIds[0] ?? ''),
-          carriedRange ?? { start: null, end: null },
-          activeDatastreamIds
-        )
-      }, 300)
+    // The refetch itself waits for the Things of the new instant (below): the
+    // chart picks its datastreams from them, and the previous instant's list
+    // would chart datastreams that did not exist yet, or miss ones that did.
+    pendingChartRefetchRef.current = {
+      range: carriedRange ?? { start: null, end: null },
     }
 
     return () => {
@@ -917,6 +961,45 @@ export function useChartState({
     // Only react to asOfDate; other values are read from the current closure.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [asOfDate])
+
+  useEffect(() => {
+    const pending = pendingChartRefetchRef.current
+    if (!pending) return
+    if ((asOfDate ?? null) !== thingsResolvedFor) return
+    pendingChartRefetchRef.current = null
+    if (!isChartOpen || !selectedDatastream) return
+
+    refetchTimerRef.current = setTimeout(() => {
+      // Refetch the WHOLE current selection (all things / observed properties)
+      // with a fresh null range, so every series re-anchors to the new
+      // snapshot window — not just the primary datastream.
+      void openChartForThingAndObservedProperties(
+        selectedThingKeysForChart,
+        selectedObservedPropertyNamesForChart,
+        datastreamIdFromSeriesId(activeDatastreamIds[0] ?? ''),
+        pending.range,
+        activeDatastreamIds
+      )
+    }, 300)
+
+    return () => {
+      if (refetchTimerRef.current) {
+        clearTimeout(refetchTimerRef.current)
+        refetchTimerRef.current = null
+      }
+    }
+    // Fires once the Things match the instant; the rest is read from this
+    // render's closure, which is the one holding those Things.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [asOfDate, thingsResolvedFor])
+
+  // Back in live mode, a selection that only existed in the snapshot (a Thing
+  // deleted since) has nothing left to show — and must not stay open with
+  // write actions enabled on a Thing that no longer exists.
+  useEffect(() => {
+    if (!asOfDate && selectedThingId && !selectedThing) closePanel()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [asOfDate, selectedThingId, selectedThing])
 
   return {
     selectedThing,

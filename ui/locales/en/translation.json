@@ -408,6 +408,17 @@
       "jump_earliest": "Jump to earliest data",
       "jump_latest": "Jump to latest data",
       "dismiss": "Dismiss"
+    },
+    "map": {
+      "loading": "Loading the map as of this date…",
+      "error": "The map could not be loaded as of this date — markers show live positions.",
+      "failed_sources_one": "{{count}} data source could not be loaded as of this date — its markers show live positions.",
+      "failed_sources_other": "{{count}} data sources could not be loaded as of this date — their markers show live positions.",
+      "approximate_one": "{{count}} Thing has no recorded location history — its marker is at its current Location.",
+      "approximate_other": "{{count}} Things have no recorded location history — their markers are at their current Location.",
+      "lost_one": "{{count}} Thing existed at this date but was deleted since, and where it stood was not preserved — it has no marker.",
+      "lost_other": "{{count}} Things existed at this date but were deleted since, and where they stood was not preserved — they have no marker.",
+      "approximate_marker": "Position not historical"
     }
   },
   "quality": {

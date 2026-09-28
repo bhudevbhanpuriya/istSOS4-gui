@@ -107,6 +107,14 @@ export type Thing = {
   __sourceEndpoint?: string
   __sourceId?: string
   __sourceName?: string
+  /**
+   * Snapshot Things only: how `Locations` was resolved for the instant.
+   * 'history' is exact; 'unplaced' means the Thing had no position yet;
+   * 'lost' means it had one but it is no longer recorded (deleted since); 'link'
+   * (only the current link is known) and 'live' (the snapshot could not be
+   * read, so this is live data) are approximate and must be shown as such.
+   */
+  __asOfLocationSource?: 'history' | 'unplaced' | 'lost' | 'link' | 'live'
   Locations?: LocationRef[]
   Datastreams?: Datastream[]
 }

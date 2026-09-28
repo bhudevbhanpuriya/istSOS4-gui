@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 
 import type { Thing } from '@/types/domain'
 import {
@@ -89,7 +89,15 @@ export function useAsOfThing({
     : ''
   const requestKey = thing && asOfDate ? `${thingKey}|${asOfDate}` : ''
 
+  // The selection hands over a new object for the same Thing whenever the
+  // map's list is re-read — the live one, then the snapshot's copy. Only the
+  // identity and the instant decide what to resolve, so that is not a reason
+  // to ask again (or to cancel a request already on its way).
+  const thingRef = useRef(thing)
+  thingRef.current = thing
+
   useEffect(() => {
+    const thing = thingRef.current
     // Live mode — nothing to resolve. The live thing is returned below without
     // waiting for any async work, so leaving snapshot mode shows live data on
     // the very same render.
@@ -127,7 +135,7 @@ export function useAsOfThing({
     return () => {
       cancelled = true
     }
-  }, [thing, asOfDate, requestKey, thingKey])
+  }, [asOfDate, requestKey, thingKey])
 
   // A resolution for this exact date, or — while a new date is still loading —
   // the previous one for the SAME thing, which keeps scrubbing from flickering.

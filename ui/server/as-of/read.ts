@@ -28,6 +28,11 @@ import { cookies } from 'next/headers'
 
 import { parseValidity as readSystemTimeValidity } from '@/lib/systemTimeValidity'
 import {
+  readThingsAsOf,
+  SnapshotReadError,
+  type ThingsAsOf,
+} from '@/server/as-of/snapshot'
+import {
   getPrimaryDataSource,
   readDataSourcesConfigFile,
 } from '@/server/data-sources/config'
@@ -42,12 +47,6 @@ export type BackendCommit = {
 
 export const normalizeApiRoot = (value: string) =>
   value.trim().replace(/\/+$/, '')
-
-/** The expand a snapshot Thing needs to fill the datastream table. */
-const THING_EXPAND = [
-  'Datastreams($expand=Network,Sensor,ObservedProperty,Observations($top=1;$orderby=phenomenonTime desc))',
-  'Locations',
-].join(',')
 
 /**
  * Resolves a client-supplied endpoint against the configured data sources.
@@ -94,6 +93,9 @@ export type ThingAsOfResult =
 /**
  * A Thing as it existed at `asOfDate`, expanded for the datastream table.
  *
+ * Built by the same `readThingsAsOf` as the map, so the panel and the marker
+ * describe one snapshot: same Datastreams, same latest readings, same place.
+ *
  * A 404 means the Thing did not exist at that point in transaction time; the
  * version history is returned with it so the caller can tell "not yet created"
  * from "deleted" without a second round trip.
@@ -104,36 +106,23 @@ export async function fetchThingAsOf(
   asOfDate: string,
   headers: Record<string, string>
 ): Promise<ThingAsOfResult> {
-  const url =
-    `${endpoint}/Things(${encodeURIComponent(thingId)})` +
-    `?$as_of=${encodeURIComponent(asOfDate)}` +
-    `&$expand=${THING_EXPAND}`
+  let snapshot: ThingsAsOf | null
+  try {
+    snapshot = await readThingsAsOf(endpoint, asOfDate, headers, thingId)
+  } catch (error) {
+    return {
+      kind: 'error',
+      status: error instanceof SnapshotReadError ? error.status : 502,
+      error: error instanceof Error ? error.message : String(error),
+    }
+  }
 
-  const response = await fetch(url, { headers, cache: 'no-store' })
-
-  if (response.status === 404) {
+  if (!snapshot || !snapshot.things[0]) {
     const versions = await fetchThingVersions(endpoint, thingId, headers)
     return { kind: 'missing', versions }
   }
 
-  if (!response.ok) {
-    return {
-      kind: 'error',
-      status: response.status,
-      error: `${response.status} ${response.statusText}`.trim(),
-    }
-  }
-
-  const thing = await response.json().catch(() => null)
-  if (!thing || typeof thing !== 'object') {
-    return {
-      kind: 'error',
-      status: 502,
-      error: 'Malformed response from data source',
-    }
-  }
-
-  return { kind: 'thing', thing: thing as Record<string, unknown> }
+  return { kind: 'thing', thing: snapshot.things[0] }
 }
 
 /**

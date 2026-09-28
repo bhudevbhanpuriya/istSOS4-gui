@@ -40,6 +40,8 @@ import { FormDataMap } from '@/features/forms/components/wizard/types'
 import { useDataSourcesSync } from './home/useDataSourcesSync'
 import { useChartState } from './home/useChartState'
 import { useAsOfThing, type ExistenceState } from '@/features/as-of/hooks/useAsOfThing'
+import { useAsOfMapThings } from '@/features/as-of/hooks/useAsOfMapThings'
+import AsOfMapStatus from '@/features/as-of/components/AsOfMapStatus'
 import {
   buildLocationsForForm,
   buildNetworksForForm,
@@ -120,6 +122,21 @@ export default function Home({
     refreshKey: syncRefreshKey,
   })
 
+  // The Things everything on this page works from: the live list, or in
+  // snapshot mode the Things as they existed at asOfDate — with the Things
+  // deleted since, without the ones created since, each where it stood then.
+  // The map, the panel selection and the chart pickers all read this one list,
+  // so they can never disagree about an instant.
+  const {
+    things: viewThings,
+    resolvedFor: viewThingsResolvedFor,
+    isLoading: mapSnapshotLoading,
+    error: mapSnapshotError,
+    failedEndpoints: mapSnapshotFailedEndpoints,
+    approximateCount: mapApproximateCount,
+    lostCount: mapLostCount,
+  } = useAsOfMapThings({ liveThings: localThings, asOfDate })
+
   const [isClientMounted, setIsClientMounted] = useState(false)
   const locationsForForm = useMemo(() => {
     return buildLocationsForForm({
@@ -171,7 +188,9 @@ export default function Home({
     applyObservationRange,
     changeActiveDatastreams,
   } = useChartState({
-    localThings,
+    localThings: viewThings,
+    liveThings: localThings,
+    thingsResolvedFor: viewThingsResolvedFor,
     token,
     asOfDate,
   })
@@ -216,7 +235,7 @@ export default function Home({
     <div className="relative h-[calc(100vh-3.5rem)] w-full overflow-hidden">
       {isClientMounted ? (
         <LeafletMap
-          things={localThings}
+          things={viewThings}
           selectedNetwork={selectedNetwork}
           asOfLabel={
             isSnapshot && asOfDate
@@ -232,6 +251,16 @@ export default function Home({
               initialTab: 'thing',
             })
           }}
+          asOfReferenceTime={isSnapshot ? asOfDate : null}
+        />
+      ) : null}
+      {isSnapshot && asOfDate ? (
+        <AsOfMapStatus
+          isLoading={mapSnapshotLoading}
+          error={mapSnapshotError}
+          failedSourceCount={mapSnapshotFailedEndpoints.length}
+          approximateCount={mapApproximateCount}
+          lostCount={mapLostCount}
         />
       ) : null}
       {createFormState ? (
@@ -275,7 +304,7 @@ export default function Home({
         onCompareAsOfDateChange={(date) => {
           void changeCompareAsOfDate(date)
         }}
-        things={localThings}
+        things={viewThings}
         thing={selectedThing}
         selectedObservedPropertyName={selectedObservedPropertyName}
         selectedThingKeys={selectedThingKeysForChart}

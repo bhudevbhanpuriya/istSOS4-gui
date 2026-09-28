@@ -34,7 +34,7 @@ import utc from 'dayjs/plugin/utc'
 
 import type { Datastream, Thing } from '@/types/domain'
 import { normalizedBasePath } from '@/app/home/utils'
-import { getDataSourceToken } from '@/lib/dataSourceTokens'
+import { getAllDataSourceTokens, getDataSourceToken } from '@/lib/dataSourceTokens'
 import {
   localDummyThings,
   type LocalTimeTravelVersion,
@@ -61,6 +61,21 @@ export type ResolvedThing = {
   existenceRange: { createdAt: string | null; deletedAt: string | null }
 }
 
+/** Every Thing the map should draw at one instant. */
+export type MapSnapshot = {
+  /**
+   * The Things that existed at the instant, as they were then. Includes Things
+   * deleted since and excludes Things created since.
+   */
+  things: Thing[]
+  /**
+   * Data sources whose snapshot could not be read. Their Things are included
+   * as LIVE data, flagged `__asOfLocationSource: 'live'`, so the map can say so
+   * instead of passing live positions off as historical ones.
+   */
+  failedEndpoints: string[]
+}
+
 // ---------------------------------------------------------------------------
 // Adapter Interface
 // ---------------------------------------------------------------------------
@@ -84,6 +99,15 @@ export interface AsOfAdapter {
    * @returns Commits sorted oldest → newest.
    */
   fetchCommits(thing: Thing): Promise<AsOfCommit[]>
+
+  /**
+   * Resolve every Thing the map draws at a given point in time.
+   *
+   * @param liveThings - The live list; the fallback for any source whose
+   *                     snapshot cannot be read.
+   * @param asOfDate   - ISO-8601 UTC date string to resolve state at.
+   */
+  resolveMapThings(liveThings: Thing[], asOfDate: string): Promise<MapSnapshot>
 }
 
 // ---------------------------------------------------------------------------
@@ -156,10 +180,24 @@ function applyVersionToThing(baseThing: Thing, version: LocalTimeTravelVersion):
     }
   })
 
+  // A version's coordinates are where the Thing stood during it. The live
+  // Location keeps its CRS and identity; only the position is historical.
+  const patchedLocations = version.coordinates
+    ? (baseThing.Locations ?? []).map((location, index) =>
+        index === 0 && location.location?.type === 'Point'
+          ? {
+              ...location,
+              location: { ...location.location, coordinates: version.coordinates },
+            }
+          : location
+      )
+    : baseThing.Locations
+
   return {
     ...baseThing,
     name: version.name ?? baseThing.name,
     description: version.description ?? baseThing.description,
+    Locations: patchedLocations,
     Datastreams: patchedDatastreams,
   }
 }
@@ -243,6 +281,34 @@ const mockAdapter: AsOfAdapter = {
 
     return []
   },
+
+  async resolveMapThings(liveThings, asOfDate) {
+    // The same resolution the panel gets, per Thing, so a marker and its panel
+    // always agree on whether the Thing existed and where it stood.
+    const resolved = await Promise.all(
+      liveThings.map(async (thing) => {
+        const result = await mockAdapter.resolveThing(thing, asOfDate)
+        if (result.existenceState !== 'exists' || !result.thing) return null
+        const id = thingId(thing)
+        const hasVersions = localDummyThings.some(
+          (d) =>
+            String(d['@iot.id'] ?? d.id ?? '') === id &&
+            !!d.properties?.timeTravel?.versions?.length
+        )
+        // Only the dummy Things carry a position history. A real Thing in mock
+        // mode is live data and is flagged so the map does not present it as
+        // historical.
+        return {
+          ...result.thing,
+          __asOfLocationSource: hasVersions ? 'history' : 'live',
+        } satisfies Thing
+      })
+    )
+    return {
+      things: resolved.filter((thing): thing is NonNullable<typeof thing> => !!thing),
+      failedEndpoints: [],
+    }
+  },
 }
 
 // ---------------------------------------------------------------------------
@@ -272,6 +338,7 @@ type BackendCommit = {
 
 const asOfThingApiPath = `${normalizedBasePath}/api/as-of/thing`
 const asOfCommitsApiPath = `${normalizedBasePath}/api/as-of/commits`
+const asOfThingsApiPath = `${normalizedBasePath}/api/as-of/things`
 
 /** POST to one of our own as-of routes. Throws on a transport-level failure. */
 async function postAsOf<T>(
@@ -462,6 +529,40 @@ const apiAdapter: AsOfAdapter = {
     return ticks.sort(
       (a, b) => dayjs.utc(a.authoredAt).valueOf() - dayjs.utc(b.authoredAt).valueOf()
     )
+  },
+
+  async resolveMapThings(liveThings, asOfDate) {
+    const payload = await postAsOf<{
+      ok: boolean
+      error?: string
+      things?: Thing[]
+      sources?: Array<{ endpoint: string; error: string | null }>
+    }>(asOfThingsApiPath, {
+      asOfDate,
+      tokens: getAllDataSourceTokens(),
+    })
+
+    if (!payload.ok) {
+      throw new Error(payload.error ?? 'Could not resolve the map snapshot')
+    }
+
+    // A source whose snapshot failed keeps its live Things — flagged, so the
+    // map marks them approximate — rather than vanishing from the map, which
+    // would read as "none of these existed then".
+    const failedEndpoints = (payload.sources ?? [])
+      .filter((source) => !!source.error)
+      .map((source) => source.endpoint.replace(/\/+$/, ''))
+    const failed = new Set(failedEndpoints)
+    const fallback = liveThings
+      .filter((thing) =>
+        failed.has(String(thing.__sourceEndpoint ?? '').replace(/\/+$/, ''))
+      )
+      .map((thing) => ({ ...thing, __asOfLocationSource: 'live' as const }))
+
+    return {
+      things: [...(payload.things ?? []), ...fallback],
+      failedEndpoints,
+    }
   },
 }
 

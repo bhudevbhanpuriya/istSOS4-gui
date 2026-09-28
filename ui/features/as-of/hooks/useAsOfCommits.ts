@@ -14,7 +14,7 @@
 
 import dayjs from 'dayjs'
 import utc from 'dayjs/plugin/utc'
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 
 import type { Thing } from '@/types/domain'
 import { activeAdapter, type AsOfCommit } from '../adapters/asOfAdapter'
@@ -63,7 +63,20 @@ export function useAsOfCommits({
   const [isLoading, setIsLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
+  // In snapshot mode the selected object is the Thing *as of* the scrubber, so
+  // it is a new object at every instant. The history belongs to the Thing, not
+  // to the instant: refetching it per move would re-request the whole timeline
+  // on every drag step. Only the Thing's identity triggers a fetch.
+  const thingKey = thing
+    ? `${String(thing.__sourceEndpoint ?? '')}::${String(
+        thing['@iot.id'] ?? thing.id ?? thing.name ?? ''
+      )}`
+    : ''
+  const thingRef = useRef(thing)
+  thingRef.current = thing
+
   useEffect(() => {
+    const thing = thingRef.current
     if (!thing) {
       setCommits([])
       setIsLoading(false)
@@ -94,7 +107,7 @@ export function useAsOfCommits({
     return () => {
       cancelled = true
     }
-  }, [thing])
+  }, [thingKey])
 
   // Scrubber right bound is always "now"
   const lastDate = dayjs.utc().toISOString()
