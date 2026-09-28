@@ -32,6 +32,7 @@ import { normalizedBasePath } from '@/app/home/utils'
 import type { HistoryWindow } from '@/features/from-to/lib/historyWindow'
 
 const RELATED_API = `${normalizedBasePath}/api/from-to/related`
+const CHANGES_API = `${normalizedBasePath}/api/from-to/changes`
 
 export type RelatedEntity = {
   path: string
@@ -48,15 +49,28 @@ export type RelatedGroup = {
   total: number | null
   /** True when the relation is too large to list — a Datastream's 2016 Observations. */
   tooMany: boolean
+  /** True when a too-large relation can still report its changes in the window. */
+  countable: boolean
   items: RelatedEntity[]
 }
+
+/**
+ * A too-large relation's changes in the window, per relation name. `loading`
+ * while its count is in flight; `value` null when it could not be counted
+ * exactly, in which case the rail keeps its plain "too many to list" line.
+ */
+export type RelationChanges = Record<
+  string,
+  { status: 'loading' | 'done'; value: number | null }
+>
 
 export function useRelatedEntities(
   path: string,
   window: HistoryWindow | null,
-): { groups: RelatedGroup[]; loading: boolean } {
+): { groups: RelatedGroup[]; loading: boolean; changes: RelationChanges } {
   const [groups, setGroups] = useState<RelatedGroup[]>([])
   const [loading, setLoading] = useState(true)
+  const [changes, setChanges] = useState<RelationChanges>({})
 
   useEffect(() => {
     if (!path || !window) {
@@ -66,6 +80,8 @@ export function useRelatedEntities(
 
     let active = true
     setLoading(true)
+    // Counts belong to one path and window; never show the previous one's.
+    setChanges({})
 
     fetch(RELATED_API, {
       method: 'POST',
@@ -75,7 +91,36 @@ export function useRelatedEntities(
       .then(async (response) => {
         const payload = await response.json().catch(() => null)
         if (!active) return
-        setGroups(payload?.ok && Array.isArray(payload.groups) ? payload.groups : [])
+        const loaded: RelatedGroup[] =
+          payload?.ok && Array.isArray(payload.groups) ? payload.groups : []
+        setGroups(loaded)
+
+        // The rail is shown now; each large relation's change count follows on
+        // its own, so a slow one delays only its own line.
+        const countable = loaded.filter((group) => group.tooMany && group.countable)
+        if (countable.length === 0) return
+        setChanges(
+          Object.fromEntries(
+            countable.map((group) => [group.relation, { status: 'loading', value: null }]),
+          ),
+        )
+        for (const group of countable) {
+          fetch(CHANGES_API, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ path, set: group.set, from: window.from, to: window.to }),
+          })
+            .then((response) => response.json().catch(() => null))
+            .catch(() => null)
+            .then((result) => {
+              if (!active) return
+              const value = typeof result?.changes === 'number' ? result.changes : null
+              setChanges((current) => ({
+                ...current,
+                [group.relation]: { status: 'done', value },
+              }))
+            })
+        }
       })
       .catch(() => {
         if (active) setGroups([])
@@ -89,5 +134,5 @@ export function useRelatedEntities(
     }
   }, [path, window?.from, window?.to])
 
-  return { groups, loading }
+  return { groups, loading, changes }
 }

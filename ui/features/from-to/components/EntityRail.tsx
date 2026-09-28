@@ -34,10 +34,15 @@ import { Spinner } from '@heroui/spinner'
 import { useTranslation } from 'react-i18next'
 
 import { singularOf } from '@/features/from-to/lib/versionedEntities'
-import type { RelatedGroup } from '@/features/from-to/hooks/useRelatedEntities'
+import type {
+  RelatedGroup,
+  RelationChanges,
+} from '@/features/from-to/hooks/useRelatedEntities'
 
 export type EntityRailProps = {
   groups: RelatedGroup[]
+  /** Change counts of the relations too large to list, by relation name. */
+  changes: RelationChanges
   loading: boolean
   /** Path of the entity currently being shown, so its row reads as selected. */
   currentPath: string
@@ -47,11 +52,15 @@ export type EntityRailProps = {
 
 export default function EntityRail({
   groups,
+  changes,
   loading,
   currentPath,
   onOpen,
 }: EntityRailProps) {
-  const { t } = useTranslation()
+  const { t, i18n } = useTranslation()
+  // Totals run to six figures; group their digits the way the page's language does.
+  const formatCount = (value: number) =>
+    new Intl.NumberFormat(i18n.language || undefined).format(value)
 
   return (
     <nav
@@ -81,12 +90,15 @@ export default function EntityRail({
               </p>
 
               {/* Some relations are far too large to enumerate — a datastream
-                  can hold thousands of observations. Naming the size still
-                  tells the reader the relation exists and how big it is. */}
+                  can hold thousands of observations. Instead of the rows, how
+                  many times they changed in the window, where that can be
+                  counted exactly; otherwise just the size of the relation. */}
               {group.tooMany && (
-                <p className="px-3.5 pb-1.5 text-tiny text-default-400">
-                  {t('from_to.rail.too_many', { count: group.total ?? 0 })}
-                </p>
+                <LargeRelation
+                  total={group.total ?? 0}
+                  change={group.countable ? changes[group.relation] : undefined}
+                  formatCount={formatCount}
+                />
               )}
 
               <ul className="px-1.5">
@@ -139,5 +151,63 @@ export default function EntityRail({
         {t('from_to.rail.counts_note')}
       </p>
     </nav>
+  )
+}
+
+/**
+ * A relation too large to list: its size, and how many times its members
+ * changed inside the window — edits and deletions — once that is counted.
+ * Without an exact count (none possible, failed or timed out) it says only
+ * how large the relation is, never a guessed number.
+ */
+function LargeRelation({
+  total,
+  change,
+  formatCount,
+}: {
+  total: number
+  change: RelationChanges[string] | undefined
+  formatCount: (value: number) => string
+}) {
+  const { t } = useTranslation()
+  const n = formatCount(total)
+
+  if (!change || (change.status === 'done' && change.value === null)) {
+    return (
+      <p className="px-3.5 pb-1.5 text-tiny text-default-400">
+        {t('from_to.rail.too_many', { count: total, n })}
+      </p>
+    )
+  }
+
+  const counted = change.status === 'done' ? change.value : null
+
+  return (
+    <div className="px-3.5 pb-1.5">
+      <div className="flex items-center justify-between gap-2 text-tiny">
+        <span className="min-w-0 text-default-600">
+          {t('from_to.rail.total', { count: total, n })}
+        </span>
+        {counted === null ? (
+          <span className="flex shrink-0 items-center gap-1.5 text-[10px] text-default-400">
+            <Spinner size="sm" classNames={{ wrapper: 'h-3 w-3' }} />
+            {t('from_to.rail.counting')}
+          </span>
+        ) : counted === 0 ? (
+          <span className="shrink-0 rounded-full bg-default-200 px-1.5 text-[10px] font-semibold text-default-600">
+            {t('from_to.rail.no_changes')}
+          </span>
+        ) : (
+          <span className="shrink-0 rounded-full bg-warning-100 px-2 text-[10px] font-bold text-warning-800">
+            {t('from_to.rail.changes', { count: counted, n: formatCount(counted) })}
+          </span>
+        )}
+      </div>
+      {counted !== null && counted > 0 && (
+        <p className="mt-1 text-[10.5px] leading-snug text-default-400">
+          {t('from_to.rail.changes_hint')}
+        </p>
+      )}
+    </div>
   )
 }

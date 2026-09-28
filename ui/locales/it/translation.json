@@ -483,8 +483,14 @@
       "current": "ATTUALE",
       "related": "In questo intervallo",
       "no_related": "Nessuna entità correlata da mostrare.",
-      "counts_note": "I conteggi sono le versioni nell'intervallo. Un'entità correlata che non è cambiata compare con zero anziché essere nascosta.",
-      "too_many": "{{count}} in totale — troppi da elencare"
+      "counts_note": "I conteggi sono le versioni nell'intervallo. Un'entità correlata che non è cambiata compare con zero anziché essere nascosta. Una relazione troppo grande da elencare mostra invece quante volte è cambiata: modifiche ed eliminazioni.",
+      "too_many": "{{n}} in totale — troppi da elencare",
+      "total": "{{n}} in totale",
+      "counting": "conteggio…",
+      "changes_one": "{{n}} modifica",
+      "changes_other": "{{n}} modifiche",
+      "no_changes": "nessuna modifica",
+      "changes_hint": "Modifiche ed eliminazioni in questo intervallo."
     },
     "compare": {
       "label": "Confronta",

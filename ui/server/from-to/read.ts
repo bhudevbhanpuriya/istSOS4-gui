@@ -317,6 +317,11 @@ export type RelatedGroup = {
   total: number | null
   /** True when the relation is too large to enumerate — see below. */
   tooMany: boolean
+  /**
+   * True when a too-large relation can still report its changes in the window
+   * (`fetchChangeCount`): only relations with a key column on the child can.
+   */
+  countable: boolean
   items: RelatedEntity[]
 }
 
@@ -378,14 +383,17 @@ export async function fetchRelatedEntities(
         headers,
       )
       if (!related || related.items.length === 0) {
-        return { relation, set, total: related?.total ?? null, tooMany: false, items: [] }
+        return { relation, set, total: related?.total ?? null, tooMany: false, countable: false, items: [] }
       }
 
       const total = related.total ?? related.items.length
 
-      // Too large to enumerate: report the size and spend no count requests.
+      // Too large to enumerate: report the size and spend no count requests
+      // here. Its change count, where one exists, is a separate request, so a
+      // slow count on a huge relation never holds up the rest of the rail.
       if (total > MAX_LISTED_RELATIONS) {
-        return { relation, set, total, tooMany: true, items: [] }
+        const countable = parentKeyColumn(entitySetOf(parentPath), set) !== null
+        return { relation, set, total, tooMany: true, countable, items: [] }
       }
 
       const counts = await Promise.all(
@@ -399,6 +407,7 @@ export async function fetchRelatedEntities(
         set,
         total,
         tooMany: false,
+        countable: false,
         items: related.items.map((entry, index) => ({
           path: `${set}(${entry.id})`,
           id: entry.id,
@@ -410,6 +419,135 @@ export async function fetchRelatedEntities(
   )
 
   return groups.filter((group) => group.items.length > 0 || group.tooMany)
+}
+
+/**
+ * The column on a child row that holds its parent's id, per parent set and
+ * child set — the only way to scope a child collection to one parent under
+ * `$from_to`.
+ *
+ * Not the parent path: under `$from_to`, `Datastreams(7)/Observations` repeats
+ * every row once per version of the Datastream, and `$filter=Datastream/id eq 7`
+ * answers 404 on a traveltime view. A plain column filter does neither — all of
+ * these were checked against a local istSOS4, and each answers a count.
+ * Many-to-many relations (Thing ↔ Location) have no such column; they are left
+ * out, and a large one keeps the plain "too many to list" line.
+ */
+const PARENT_KEY_COLUMNS: Record<string, Record<string, string>> = {
+  Datastreams: { Observations: 'datastream_id' },
+  FeaturesOfInterest: { Observations: 'featuresofinterest_id' },
+  Things: { Datastreams: 'thing_id', HistoricalLocations: 'thing_id' },
+  Sensors: { Datastreams: 'sensor_id' },
+  ObservedProperties: { Datastreams: 'observedproperty_id' },
+  Networks: { Datastreams: 'network_id' },
+}
+
+/** The key column scoping `childSet` to one entity of `parentSet`, if any. */
+export function parentKeyColumn(
+  parentSet: string | null,
+  childSet: string,
+): string | null {
+  if (!parentSet) return null
+  return PARENT_KEY_COLUMNS[parentSet]?.[childSet] ?? null
+}
+
+/** A change count reads two whole collections; past this it gives up. */
+const CHANGE_COUNT_TIMEOUT_MS = 10_000
+
+/**
+ * How far behind the present the counts are taken. Both are read as of one
+ * instant that has already passed, so rows written while the two requests are
+ * in flight cannot land in one count and not the other; it also keeps the
+ * instant out of the future, which `$as_of` rejects with a 500.
+ */
+const SETTLED_LAG_MS = 2_000
+
+async function readCount(
+  url: string,
+  headers: Record<string, string>,
+): Promise<number | null> {
+  try {
+    const response = await fetch(url, {
+      headers,
+      cache: 'no-store',
+      signal: AbortSignal.timeout(CHANGE_COUNT_TIMEOUT_MS),
+    })
+    if (!response.ok) return null
+    const payload = (await response.json().catch(() => null)) as Record<string, unknown> | null
+    const count = payload?.['@iot.count']
+    return typeof count === 'number' ? count : null
+  } catch {
+    return null
+  }
+}
+
+/**
+ * How many times a parent's children changed inside a window — edits plus
+ * deletions — without listing a single child.
+ *
+ * Two counts at one instant `T` (the window's end, or just before now):
+ *
+ * - `V`, the child versions overlapping `[from, T]`;
+ * - `E`, the children that exist at `T`.
+ *
+ * A child edited k times inside the window has k+1 versions there and counts
+ * once in `E`, so it contributes exactly k. One created inside the window
+ * contributes its edits the same way; one deleted inside it is missing from
+ * `E`, so its deletion counts as one change. Unchanged children contribute 0.
+ * `V − E` is therefore every edit and deletion in the window — checked against
+ * the database itself at full precision, e.g. Datastream 7's 6057 versions
+ * (4041 both ways). The window is `[from, T)`, end excluded, exactly as the
+ * API's `$from_to` compiles it (`tstzrange(from, to)`), and `$as_of T` reads
+ * the state that holds just after it, so a change landing at `T` itself is
+ * outside the window in both counts.
+ *
+ * It counts changes, not distinct children: one Observation edited twice is 2.
+ * Counting distinct ones would mean reading every version, because the API
+ * cannot filter versions by when they began.
+ *
+ * Returns `null` — never a guess — when the relation has no key column, a
+ * count fails or times out, or the counts disagree (a negative difference).
+ */
+export async function fetchChangeCount(
+  endpoint: string,
+  parentPath: string,
+  childSet: string,
+  window: HistoryWindow,
+  headers: Record<string, string>,
+  now: number = Date.now(),
+): Promise<number | null> {
+  const path = historyPath(parentPath)
+  if (!path) return null
+  const column = parentKeyColumn(entitySetOf(path), childSet)
+  const id = entityIdOf(path)
+  // Ids are interpolated into `$filter`, so only plain integers go through.
+  if (!column || !id || !/^\d+$/.test(id)) return null
+
+  const settledEnd = Math.min(Date.parse(window.to), now - SETTLED_LAG_MS)
+  if (!Number.isFinite(settledEnd) || settledEnd < Date.parse(window.from)) return null
+  const at = new Date(settledEnd).toISOString()
+  const fromTo = formatWindow({ from: window.from, to: at })
+  if (!fromTo) return null
+  const instant = fromTo.slice(fromTo.indexOf('/') + 1)
+
+  const scope =
+    `&$filter=${encodeURIComponent(`${column} eq ${id}`)}` +
+    `&$count=true&$top=1&$select=@iot.id`
+
+  const [versions, existing] = await Promise.all([
+    readCount(
+      `${endpoint}/${childSet}?$from_to=${encodeURIComponent(fromTo)}${scope}`,
+      headers,
+    ),
+    readCount(
+      `${endpoint}/${childSet}?$as_of=${encodeURIComponent(instant)}${scope}`,
+      headers,
+    ),
+  ])
+
+  if (versions === null || existing === null) return null
+  const changes = versions - existing
+  return changes >= 0 ? changes : null
 }
 
 /**

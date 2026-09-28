@@ -394,6 +394,7 @@ export default function HistoryPage({
           <div className="grid grid-cols-1 xl:grid-cols-[200px_minmax(0,1fr)_260px]">
             <EntityRail
               groups={related.groups}
+              changes={related.changes}
               loading={related.loading}
               currentPath={path}
               window={window!}

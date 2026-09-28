@@ -483,8 +483,14 @@
       "current": "CURRENT",
       "related": "In this window",
       "no_related": "Nothing related to show.",
-      "counts_note": "Counts are versions inside the window. A related entity that did not change is listed with zero rather than hidden.",
-      "too_many": "{{count}} in total — too many to list"
+      "counts_note": "Counts are versions inside the window. A related entity that did not change is listed with zero rather than hidden. A relation too large to list shows its changes instead: edits and deletions.",
+      "too_many": "{{n}} in total — too many to list",
+      "total": "{{n}} in total",
+      "counting": "counting…",
+      "changes_one": "{{n}} change",
+      "changes_other": "{{n}} changes",
+      "no_changes": "no changes",
+      "changes_hint": "Edits and deletions inside this window."
     },
     "compare": {
       "label": "Compare",
