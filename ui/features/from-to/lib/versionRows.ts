@@ -156,18 +156,30 @@ export function dedupeVersions(versions: EntityVersion[]): EntityVersion[] {
   const unique: EntityVersion[] = []
 
   for (const version of versions) {
-    const key = [
-      version.id,
-      version.validity.start,
-      version.validity.end ?? '',
-      version.commit?.['@iot.id'] ?? '',
-    ].join('|')
+    const key = versionKey(version)
     if (seen.has(key)) continue
     seen.add(key)
     unique.push(version)
   }
 
   return unique
+}
+
+/**
+ * A version's identity: entity, validity and the commit that wrote it.
+ *
+ * The validity alone is not one — rapid edits share the printed second (see
+ * dedupeVersions) — so anything that must tell versions apart, a React key
+ * included, uses this. Every list `readVersions` returns has been deduplicated
+ * on exactly this key, so within one list it is unique by construction.
+ */
+export function versionKey(version: EntityVersion): string {
+  return [
+    version.id,
+    version.validity.start,
+    version.validity.end ?? '',
+    version.commit?.['@iot.id'] ?? '',
+  ].join('|')
 }
 
 /**

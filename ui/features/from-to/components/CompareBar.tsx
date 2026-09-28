@@ -36,7 +36,7 @@ import dayjs from 'dayjs'
 import utc from 'dayjs/plugin/utc'
 import { useTranslation } from 'react-i18next'
 
-import type { EntityVersion } from '@/features/from-to/lib/versionRows'
+import { versionKey, type EntityVersion } from '@/features/from-to/lib/versionRows'
 
 dayjs.extend(utc)
 
@@ -95,7 +95,7 @@ export default function CompareBar({
         onChange={(event) => onSelect('a', Number(event.target.value))}
       >
         {versions.map((version, index) => (
-          <option key={`a-${version.validity.start}`} value={index}>
+          <option key={`a-${versionKey(version)}`} value={index}>
             {optionLabel(version, index)}
           </option>
         ))}
@@ -113,7 +113,7 @@ export default function CompareBar({
         onChange={(event) => onSelect('b', Number(event.target.value))}
       >
         {versions.map((version, index) => (
-          <option key={`b-${version.validity.start}`} value={index}>
+          <option key={`b-${versionKey(version)}`} value={index}>
             {optionLabel(version, index)}
           </option>
         ))}

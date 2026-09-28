@@ -34,7 +34,7 @@ import dayjs from 'dayjs'
 import utc from 'dayjs/plugin/utc'
 import { useTranslation } from 'react-i18next'
 
-import type { EntityVersion } from '@/features/from-to/lib/versionRows'
+import { versionKey, type EntityVersion } from '@/features/from-to/lib/versionRows'
 
 dayjs.extend(utc)
 
@@ -86,7 +86,7 @@ export default function VersionRail({
             const isB = index === indexB
 
             return (
-              <li key={`${version.id}-${version.validity.start}`}>
+              <li key={versionKey(version)}>
                 <button
                   type="button"
                   onClick={() => onPick(index)}

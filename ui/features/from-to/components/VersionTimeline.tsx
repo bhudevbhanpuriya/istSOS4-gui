@@ -38,7 +38,7 @@ import {
   formatDuration,
 } from '@/features/from-to/lib/timelineBands'
 import { validityDurationMs } from '@/lib/systemTimeValidity'
-import type { EntityVersion } from '@/features/from-to/lib/versionRows'
+import { versionKey, type EntityVersion } from '@/features/from-to/lib/versionRows'
 
 dayjs.extend(utc)
 
@@ -103,7 +103,7 @@ export default function VersionTimeline({
 
           return (
             <button
-              key={`${version.id}-${version.validity.start}`}
+              key={versionKey(version)}
               type="button"
               onClick={() => onPick(index)}
               // A floor in pixels as well as percent: at a hundred versions the
