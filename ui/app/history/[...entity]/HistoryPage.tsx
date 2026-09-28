@@ -271,11 +271,15 @@ export default function HistoryPage({
      covers edge to edge. This page does not, so it brings its own surface —
      otherwise the teal shows through and `text-primary` links vanish into it. */
   const surface = 'min-h-[calc(100vh-3.5rem)] w-full bg-background'
+  /* Full window width: field values are the point of this page, and a centred
+     column left most of a wide screen empty while they were cut off. Shared by
+     the loading and loaded states so the page does not jump when data lands. */
+  const column = 'w-full px-4 py-5 lg:px-6'
 
   if (!mounted) {
     return (
       <div className={surface}>
-        <main className="mx-auto w-full max-w-[1180px] px-4 py-5">
+        <main className={column}>
           <div className="flex items-center justify-center rounded-xl border border-default-200 bg-content1 px-6 py-16">
             <Spinner size="sm" />
           </div>
@@ -286,7 +290,7 @@ export default function HistoryPage({
 
   return (
     <div className={surface}>
-      <main className="mx-auto w-full max-w-[1180px] px-4 py-5">
+      <main className={column}>
       <nav className="flex items-center gap-2 text-tiny text-default-500">
         <button
           type="button"
@@ -384,7 +388,10 @@ export default function HistoryPage({
         ) : (
           /* Three regions: what else changed, this entity's versions, and the
              comparison between two of them. The diff pane lands in Group 6. */
-          <div className="grid grid-cols-1 lg:grid-cols-[200px_minmax(0,1fr)_260px]">
+          /* The side rails only sit beside the comparison from xl: between lg
+             and xl they left it ~530px, too narrow for its values, so below
+             xl the regions stack and the comparison takes the full width. */
+          <div className="grid grid-cols-1 xl:grid-cols-[200px_minmax(0,1fr)_260px]">
             <EntityRail
               groups={related.groups}
               loading={related.loading}
@@ -479,8 +486,10 @@ function VersionDetail({
           <dt className="text-[9px] font-bold uppercase tracking-wider text-default-400">
             {label}
           </dt>
+          {/* Wrapped, not truncated: a commit message is the part that says
+              why the version exists. Long unbroken tokens may break anywhere. */}
           <dd
-            className={`truncate text-tiny ${mono ? 'font-mono' : ''}`}
+            className={`whitespace-pre-wrap text-tiny [overflow-wrap:anywhere] ${mono ? 'font-mono' : ''}`}
             title={value}
           >
             {value}

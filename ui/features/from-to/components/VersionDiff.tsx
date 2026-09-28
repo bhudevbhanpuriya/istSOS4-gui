@@ -25,9 +25,11 @@
  *
  * Fields are grouped by their top-level key, which is what makes a unit
  * correction read as three related edits under `unitOfMeasurement` rather than
- * three unrelated rows. Values are never wrapped: `observedArea.coordinates` is
- * a long single line and scrolls inside its own cell, so a polygon cannot push
- * the page sideways.
+ * three unrelated rows. Values wrap, so an interval, a URL or a description
+ * reads in full; a value too long to be worth wrapping in place — a polygon's
+ * `observedArea.coordinates` is one leaf — stops at a fixed height and scrolls
+ * inside its own cell, so it can neither push the page sideways nor bury the
+ * rows below it.
  */
 
 import { useTranslation } from 'react-i18next'
@@ -156,7 +158,7 @@ function DiffRow({
   const newTone = same ? 'flat' : change.to === null ? 'absent' : 'new'
 
   return (
-    <div className="grid items-center gap-2.5 rounded-lg border border-default-100 px-2.5 py-2 md:grid-cols-[minmax(0,190px)_minmax(0,1fr)_14px_minmax(0,1fr)]">
+    <div className="grid items-center gap-2.5 rounded-lg border border-default-100 px-2.5 py-2 md:grid-cols-[minmax(0,160px)_minmax(0,1fr)_14px_minmax(0,1fr)]">
       <div className="min-w-0">
         <p className="break-all font-mono text-tiny font-semibold">{change.path}</p>
         <span
@@ -199,10 +201,11 @@ function ValueCell({
       <p className="mb-1 text-[9px] uppercase tracking-wide text-default-400">
         {caption}
       </p>
-      {/* Long values scroll in place: a polygon must not wrap the row or widen
-          the page. */}
+      {/* Wraps anywhere — ISO intervals and URLs have no spaces to break at —
+          and caps its height, so a polygon scrolls down inside the cell
+          instead of widening the page or towering over the diff. */}
       <p
-        className={`overflow-x-auto whitespace-nowrap rounded-md px-2 py-1 font-mono text-tiny ${VALUE_TONE[tone]}`}
+        className={`max-h-40 overflow-y-auto whitespace-pre-wrap rounded-md px-2 py-1 font-mono text-tiny [overflow-wrap:anywhere] ${VALUE_TONE[tone]}`}
         title={formatValue(value)}
       >
         {formatValue(value)}

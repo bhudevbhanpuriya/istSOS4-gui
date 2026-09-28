@@ -55,7 +55,7 @@ export default function EntityRail({
 
   return (
     <nav
-      className="border-default-100 bg-default-50 lg:border-r"
+      className="border-default-100 bg-default-50 xl:border-r"
       aria-label={t('from_to.rail.related')}
     >
       <div className="px-3.5 pb-1 pt-3">

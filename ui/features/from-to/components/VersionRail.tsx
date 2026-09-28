@@ -67,7 +67,7 @@ export default function VersionRail({
 
   return (
     <aside
-      className="border-default-100 bg-default-50 lg:border-l"
+      className="border-default-100 bg-default-50 xl:border-l"
       aria-label={t('from_to.rail.versions')}
     >
       <div className="px-3.5 pb-2 pt-3">
