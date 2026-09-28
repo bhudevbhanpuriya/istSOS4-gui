@@ -28,6 +28,7 @@ import { cookies } from 'next/headers'
 
 import { parseValidity as readSystemTimeValidity } from '@/lib/systemTimeValidity'
 import {
+  readAll,
   readThingsAsOf,
   SnapshotReadError,
   type ThingsAsOf,
@@ -175,7 +176,8 @@ function parseValidity(
  * The history lives in the `Thing_traveltime` view instead, where every version
  * keeps the `commit_id` in effect for it. `$from_to` reads that view, returning
  * one row per version ordered oldest → newest, and `$expand=Commit` attaches
- * each version's own commit — so the whole timeline arrives in one request.
+ * each version's own commit — so the whole timeline arrives in one query,
+ * paged like any collection (a busy Thing outgrows the API's 100-row page).
  *
  * `$expand` must be the SINGULAR `Commit`: the plural is rejected, as is any
  * other expand, and both come back as a 500 rather than a 4xx.
@@ -195,15 +197,12 @@ export async function fetchThingVersions(
 
   let rows: unknown[] = []
   try {
-    const response = await fetch(url, { headers, cache: 'no-store' })
+    // Every page: a busy Thing has more versions than one page holds, and a
+    // first page ending on a closed version would read as a deletion.
+    rows = await readAll(url, headers)
+  } catch {
     // A backend without versioning enabled has no systemTimeValidity column and
     // rejects $from_to outright; fall back to reading versions one at a time.
-    if (!response.ok) {
-      return walkThingVersions(endpoint, thingId, headers)
-    }
-    const data = await response.json().catch(() => null)
-    rows = Array.isArray(data?.value) ? data.value : []
-  } catch {
     return walkThingVersions(endpoint, thingId, headers)
   }
 
