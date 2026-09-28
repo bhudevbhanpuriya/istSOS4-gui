@@ -16,6 +16,7 @@ import { NextResponse } from 'next/server'
 
 import {
   fetchThingCommits,
+  fetchThingLocationChanges,
   fetchThingVersions,
   resolveAuthHeaders,
   resolveConfiguredEndpoint,
@@ -57,11 +58,16 @@ export async function POST(request: Request) {
     // produced it (see fetchThingVersions). `commits` is only read when that
     // comes back empty, so it costs a round trip only when there is no history
     // to show otherwise.
-    const versions = await fetchThingVersions(endpoint, thingId, headers)
+    const [versions, locationChanges] = await Promise.all([
+      fetchThingVersions(endpoint, thingId, headers),
+      // Relocations and Location edits leave the Thing's own versions alone,
+      // yet they move its marker — the scrubber needs a tick for each.
+      fetchThingLocationChanges(endpoint, thingId, headers),
+    ])
     const commits = versions.length
       ? []
       : await fetchThingCommits(endpoint, thingId, headers)
-    return NextResponse.json({ ok: true, commits, versions })
+    return NextResponse.json({ ok: true, commits, versions, locationChanges })
   } catch (error: unknown) {
     return NextResponse.json({
       ok: false,

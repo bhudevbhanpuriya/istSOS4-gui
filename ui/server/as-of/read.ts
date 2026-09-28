@@ -223,6 +223,132 @@ export async function fetchThingVersions(
   return versions.sort((a, b) => Date.parse(a.start) - Date.parse(b.start))
 }
 
+/** One change to where a Thing stands, at the instant it was committed. */
+export type LocationChange = {
+  at: string
+  commit: BackendCommit | null
+}
+
+/**
+ * Every change to where a Thing stands: each relocation (a HistoricalLocation)
+ * and each edit of a Location it has stood at (a Location version).
+ *
+ * The Thing's own versions miss both. `PATCH Things(id)` with only `Locations`
+ * never touches the Thing row — the link table and HistoricalLocation take the
+ * write — and editing a Location's coordinates writes only the Location. So the
+ * scrubber showed no tick for the very change that moves the marker.
+ *
+ * A relocation is timed by its commit, not by HistoricalLocation `time`: that
+ * field is client-settable and need not be transaction time at all. Without a
+ * commit (a backend writing none), `time` is the only instant available.
+ *
+ * Returns oldest → newest; empty for a Thing whose history cannot be read (one
+ * deleted since has no live HistoricalLocations to navigate to).
+ */
+export async function fetchThingLocationChanges(
+  endpoint: string,
+  thingId: string,
+  headers: Record<string, string>
+): Promise<LocationChange[]> {
+  const changes: LocationChange[] = []
+  const locationIds = new Set<string>()
+  // Each relocation, as [instant, the Locations it moved the Thing to].
+  const stays: Array<{ atMs: number; locationIds: Set<string> }> = []
+
+  try {
+    const rows = await readAll(
+      `${endpoint}/Things(${encodeURIComponent(thingId)})/HistoricalLocations` +
+        `?$select=id,time&$expand=Commit,Locations($select=id)`,
+      headers
+    )
+    for (const row of rows) {
+      const commit = row?.Commit as BackendCommit | undefined
+      const at = commit?.date ?? (typeof row?.time === 'string' ? row.time : null)
+      if (at) {
+        changes.push({
+          at,
+          commit: commit && commit['@iot.id'] != null ? commit : null,
+        })
+      }
+      const locations = Array.isArray(row?.Locations)
+        ? (row.Locations as Record<string, unknown>[])
+        : []
+      const ids = new Set<string>()
+      for (const location of locations) {
+        const id = String(location?.['@iot.id'] ?? '')
+        if (id) ids.add(id)
+      }
+      ids.forEach((id) => locationIds.add(id))
+      const atMs = at ? Date.parse(at) : NaN
+      if (Number.isFinite(atMs)) stays.push({ atMs, locationIds: ids })
+    }
+  } catch {
+    return []
+  }
+
+  // Relocations landing in one instant are one move, to all their Locations.
+  const moves = new Map<number, Set<string>>()
+  for (const stay of stays) {
+    const ids = moves.get(stay.atMs) ?? new Set<string>()
+    stay.locationIds.forEach((id) => ids.add(id))
+    moves.set(stay.atMs, ids)
+  }
+  const timeline = Array.from(moves.entries()).sort((a, b) => a[0] - b[0])
+
+  /** Did the Thing stand at `locationId` at `ms`? Only then does an edit move it. */
+  const stoodAt = (locationId: string, ms: number) => {
+    let current: Set<string> | null = null
+    for (const [atMs, ids] of timeline) {
+      if (atMs > ms) break
+      current = ids
+    }
+    return !!current?.has(locationId)
+  }
+
+  // One request per Location the Thing has ever stood at — never through the
+  // Thing's path: `Things(id)/Locations?$from_to` loses the parent filter.
+  const locationVersions = await Promise.all(
+    Array.from(locationIds).map(async (locationId) => {
+      try {
+        const rows = await readAll(
+          `${endpoint}/Locations(${encodeURIComponent(locationId)})` +
+            `?$from_to=${encodeURIComponent(FULL_HISTORY_WINDOW)}` +
+            `&$expand=Commit&$select=systemTimeValidity`,
+          headers
+        )
+        return rows.map((row) => ({ locationId, row }))
+      } catch {
+        return []
+      }
+    })
+  )
+
+  for (const { locationId, row } of locationVersions.flat()) {
+    const range = parseValidity(row?.systemTimeValidity)
+    if (!range) continue
+    // A Location's creation moves nothing — the relocation onto it is the
+    // change, and has its tick above. Only a later edit made while the Thing
+    // stood there moved the marker; an edit before it arrived or after it left
+    // belongs to other Things' timelines.
+    const startMs = Date.parse(range.start)
+    const created = !locationVersions
+      .flat()
+      .some(
+        (other) =>
+          other.locationId === locationId &&
+          Date.parse(parseValidity(other.row?.systemTimeValidity)?.start ?? '') < startMs
+      )
+    if (created || !stoodAt(locationId, startMs)) continue
+    const commit = row?.Commit as BackendCommit | undefined
+    changes.push({
+      at: range.start,
+      commit: commit && commit['@iot.id'] != null ? commit : null,
+    })
+  }
+
+  return changes.sort((a, b) => Date.parse(a.at) - Date.parse(b.at))
+}
+
 /**
  * Fallback history walk for backends where `$from_to` is unavailable.
  *

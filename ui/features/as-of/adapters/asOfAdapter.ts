@@ -489,6 +489,7 @@ const apiAdapter: AsOfAdapter = {
       ok: boolean
       commits?: BackendCommit[]
       versions?: BackendVersion[]
+      locationChanges?: Array<{ at: string; commit: BackendCommit | null }>
     }>(asOfCommitsApiPath, {
       endpoint,
       thingId: id,
@@ -525,6 +526,36 @@ const apiAdapter: AsOfAdapter = {
             authoredAt: commit.date,
             message: commit.message,
           }))
+
+    // Where the Thing stood changes without a Thing version (see
+    // fetchThingLocationChanges), so those changes are ticks of their own. A
+    // commit already on the timeline is not repeated, and nothing is placed
+    // before the Thing existed — the left bound of the scrubber stays its
+    // creation, where a Location made ahead of it would otherwise pull it.
+    const seenCommits = new Set(ticks.map((tick) => tick.id))
+    const seenInstants = new Set(
+      ticks.map((tick) => Math.floor(dayjs.utc(tick.authoredAt).valueOf() / 1000))
+    )
+    const createdAtMs = versionTicks.length
+      ? Math.min(...versionTicks.map((tick) => dayjs.utc(tick.authoredAt).valueOf()))
+      : -Infinity
+    for (const change of payload.locationChanges ?? []) {
+      const atMs = dayjs.utc(change.at).valueOf()
+      if (!Number.isFinite(atMs) || atMs < createdAtMs) continue
+      const id = change.commit?.['@iot.id'] != null
+        ? String(change.commit['@iot.id'])
+        : `l:${change.at}`
+      const second = Math.floor(atMs / 1000)
+      if (seenCommits.has(id) || (!change.commit && seenInstants.has(second))) continue
+      seenCommits.add(id)
+      seenInstants.add(second)
+      ticks.push({
+        id,
+        authoredAt: change.at,
+        // Free backend text, like the version ticks above.
+        message: change.commit?.message ?? 'Location changed',
+      })
+    }
 
     return ticks.sort(
       (a, b) => dayjs.utc(a.authoredAt).valueOf() - dayjs.utc(b.authoredAt).valueOf()
