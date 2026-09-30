@@ -12,12 +12,23 @@ import {
 import {
   QUALITY_CLASSES,
   QUALITY_COLORS,
-  QUALITY_LABEL_KEYS,
+  qualityLabel,
   type QualityClass,
   type QualitySegment,
 } from './resultQuality'
 
 dayjs.extend(utc)
+
+/** For text that lands in a tooltip's HTML — verdict names are the viewer's own. */
+export function escapeHtml(text: string) {
+  return text.replace(
+    /[&<>"']/g,
+    (char) =>
+      ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[
+        char
+      ] ?? char
+  )
+}
 
 /** Snapshot chrome — the markLine, matching the amber As-Of badge and banner. */
 const SNAPSHOT_COLOR = '#f59e0b'
@@ -31,6 +42,8 @@ const SNAPSHOT_COLOR = '#f59e0b'
 export type QualityLane = {
   id: string
   tag?: string
+  /** The tag's colour, where no series colour decides it (the rules preview). */
+  tagColor?: string
   segments: QualitySegment[]
 }
 
@@ -242,6 +255,229 @@ export function buildMarkLine(
   }
 }
 
+/**
+ * The strips, as one custom series over the lane grid (x axis 1, y axis 2).
+ *
+ * A custom series rather than a bar or heatmap because a segment spans an
+ * arbitrary x range — it is a run of readings already collapsed by
+ * `buildQualitySegments`, so a window of 2000 points draws a handful of rects
+ * instead of 2000 abutting ones.
+ *
+ * `silent` keeps it out of hover and click handling entirely: the strip is a
+ * readout of the series above it, never a thing to select in its own right.
+ *
+ * Shared by the observation chart and the rules preview, so a strip reads the
+ * same wherever it is drawn. `tagColor` colours each strip's label.
+ */
+export function buildQualityLaneSeries(
+  qualityLanes: QualityLane[],
+  tagColor: (lane: QualityLane) => string,
+  axes: { xAxisIndex: number; yAxisIndex: number } = {
+    xAxisIndex: 1,
+    yAxisIndex: 2,
+  }
+): echarts.CustomSeriesOption {
+  const laneCount = qualityLanes.length
+  return {
+    id: QUALITY_SERIES_ID,
+    name: QUALITY_SERIES_ID,
+    type: 'custom',
+    ...axes,
+    silent: true,
+    animation: false,
+    // [ startX, endX, laneIndex, classIndex ]
+    data: qualityLanes.flatMap((lane, laneIndex) => {
+      const runs = lane.segments.map((segment) => [
+        segment.startX,
+        segment.endX,
+        laneIndex,
+        QUALITY_CLASSES.indexOf(segment.qualityClass),
+      ])
+      // The label beside the strip. Absent when there is one strip and the
+      // legend below names it.
+      if (!lane.tag || lane.segments.length === 0) return runs
+      const first = lane.segments[0]
+      const last = lane.segments[lane.segments.length - 1]
+      return [...runs, [first.startX, last.endX, laneIndex, LANE_TAG_ITEM]]
+    }),
+    encode: { x: [0, 1], y: 2 },
+    renderItem: (
+      params: echarts.CustomSeriesRenderItemParams,
+      api: echarts.CustomSeriesRenderItemAPI
+    ) => {
+      const laneIndex = Number(api.value(2))
+      const classIndex = Number(api.value(3))
+      const coordSys = params.coordSys as unknown as {
+        x: number
+        y: number
+        width: number
+        height: number
+      }
+      if (classIndex === LANE_TAG_ITEM) {
+        const lane = qualityLanes[laneIndex]
+        // In the gutter left of the strip, on the lane's centre line, in the
+        // colour of the series it describes — so the strip and the line above
+        // it pair by colour as well as by letter.
+        const centreY = api.coord([api.value(0), laneCount - laneIndex - 0.5])[1]
+        return {
+          type: 'text',
+          style: {
+            text: lane?.tag ?? '',
+            x: coordSys.x - LANE_TAG_GAP,
+            y: centreY,
+            align: 'right',
+            verticalAlign: 'middle',
+            fontSize: 10,
+            fontWeight: 'bold',
+            fill: lane ? tagColor(lane) : '#94a3b8',
+          },
+        }
+      }
+      // Lane 0 sits at the top, so it takes the highest band on an axis that
+      // runs 0..laneCount. The 0.08 inset leaves a hairline between two
+      // stacked strips without needing a separate spacer.
+      const topLeft = api.coord([api.value(0), laneCount - laneIndex - 0.08])
+      const bottomRight = api.coord([
+        api.value(1),
+        laneCount - laneIndex - 0.92,
+      ])
+      const clipped = echarts.graphic.clipRectByRect(
+        {
+          x: topLeft[0],
+          y: topLeft[1],
+          // Never below a hairline: a run of one reading would otherwise be a
+          // zero-width rect and paint nothing at all.
+          width: Math.max(bottomRight[0] - topLeft[0], 1),
+          height: bottomRight[1] - topLeft[1],
+        },
+        coordSys
+      )
+      if (!clipped) return undefined
+      return {
+        type: 'rect',
+        shape: clipped,
+        style: {
+          fill: QUALITY_COLORS[
+            (QUALITY_CLASSES[classIndex] ?? 'none') as QualityClass
+          ],
+        },
+      }
+    },
+  }
+}
+
+/** Height of the preview's date band — one unrotated row of labels. */
+const PREVIEW_AXIS_BAND = 26
+
+/**
+ * The quality rules editor's preview: one series over two or more strips, with
+ * none of the observation chart's furniture.
+ *
+ * It exists to show how a draft scheme re-reads the same readings, so it keeps
+ * only what that comparison needs — the line, the strips, a date axis and a
+ * tooltip — and drops the toolbox, legend, zoom and rotated labels, which would
+ * take most of a 200px-high chart for themselves.
+ */
+export function buildQualityPreviewOption({
+  entry,
+  lanes,
+  primaryColor,
+  tooltip,
+}: {
+  entry: GraphSeriesEntry
+  /** Top to bottom. Each lane's `id` names the scheme it was drawn under. */
+  lanes: QualityLane[]
+  primaryColor: string
+  /** Tooltip body for the reading at a plotted x. */
+  tooltip: (row: GraphRow) => string
+}): echarts.EChartsOption {
+  const laneBlock = laneBlockHeight(lanes.length)
+  const rowsByTs = new Map(entry.rows.map((row) => [row.ts, row]))
+  const xScale = { type: 'time' as const, minInterval: 60 * 60 * 1000 }
+  return {
+    animation: false,
+    axisPointer: { link: [{ xAxisIndex: 'all' }] },
+    grid: [
+      {
+        left: 50,
+        right: 20,
+        top: 10,
+        bottom: PREVIEW_AXIS_BAND + laneBlock + LANE_OFFSET,
+      },
+      { left: 50, right: 20, height: laneBlock, bottom: PREVIEW_AXIS_BAND },
+    ],
+    tooltip: {
+      trigger: 'axis',
+      borderColor: primaryColor,
+      extraCssText: 'max-width:340px;white-space:normal;',
+      formatter: (params: unknown) => {
+        const first = (Array.isArray(params) ? params : [params])[0] as
+          | { data?: unknown }
+          | undefined
+        const ts = Array.isArray(first?.data) ? Number(first.data[0]) : NaN
+        const row = rowsByTs.get(ts)
+        return row ? tooltip(row) : ''
+      },
+      axisPointer: { type: 'line', lineStyle: { color: primaryColor, width: 1 } },
+    },
+    xAxis: [
+      {
+        ...xScale,
+        gridIndex: 0,
+        axisLine: { lineStyle: { color: primaryColor } },
+        axisLabel: { show: false },
+        axisTick: { show: false },
+      },
+      {
+        ...xScale,
+        gridIndex: 1,
+        axisLine: { lineStyle: { color: primaryColor } },
+        axisLabel: {
+          hideOverlap: true,
+          fontSize: 10,
+          formatter: (value: number) => dayjs.utc(value).format('DD/MM HH:mm'),
+        },
+      },
+    ],
+    yAxis: [
+      {
+        type: 'value',
+        scale: true,
+        gridIndex: 0,
+        splitNumber: 3,
+        axisLabel: { fontSize: 10 },
+        splitLine: { lineStyle: { color: withAlpha(primaryColor, 0.15) } },
+      },
+      {
+        type: 'value',
+        gridIndex: 1,
+        min: 0,
+        max: lanes.length,
+        show: false,
+      },
+    ],
+    series: [
+      {
+        id: entry.id,
+        name: entry.id,
+        type: 'line',
+        data: entry.rows.map((row) => [row.ts, row.value]),
+        showSymbol: false,
+        sampling: 'lttb',
+        lineStyle: { color: primaryColor, width: 1.5 },
+        itemStyle: { color: primaryColor },
+        xAxisIndex: 0,
+        yAxisIndex: 0,
+      },
+      buildQualityLaneSeries(
+        lanes,
+        (lane) => lane.tagColor ?? '#94a3b8',
+        { xAxisIndex: 1, yAxisIndex: 1 }
+      ),
+    ],
+  }
+}
+
 export function buildObservationGraphOption({
   seriesEntries,
   activeDatastreamIds,
@@ -419,122 +655,15 @@ export function buildObservationGraphOption({
 
   const axisLine = { lineStyle: { color: primaryColor } }
 
-  /**
-   * The strips, as one custom series over the lane grid.
-   *
-   * A custom series rather than a bar or heatmap because a segment spans an
-   * arbitrary x range — it is a run of readings already collapsed by
-   * `buildQualitySegments`, so a window of 2000 points draws a handful of rects
-   * instead of 2000 abutting ones.
-   *
-   * `silent` keeps it out of hover and click handling entirely: the strip is a
-   * readout of the series above it, never a thing to select in its own right.
-   */
   const laneSeries: echarts.CustomSeriesOption[] = hasLanes
     ? [
-        {
-          id: QUALITY_SERIES_ID,
-          name: QUALITY_SERIES_ID,
-          type: 'custom',
-          xAxisIndex: 1,
-          yAxisIndex: 2,
-          silent: true,
-          animation: false,
-          // [ startX, endX, laneIndex, classIndex ]
-          data: qualityLanes.flatMap((lane, laneIndex) => {
-            const runs = lane.segments.map((segment) => [
-              segment.startX,
-              segment.endX,
-              laneIndex,
-              QUALITY_CLASSES.indexOf(segment.qualityClass),
-            ])
-            // The "A"/"B" beside the strip when comparing. Absent in live
-            // mode, where there is one strip and the legend below names it.
-            if (!lane.tag || lane.segments.length === 0) return runs
-            const first = lane.segments[0]
-            const last = lane.segments[lane.segments.length - 1]
-            return [
-              ...runs,
-              [first.startX, last.endX, laneIndex, LANE_TAG_ITEM],
-            ]
-          }),
-          encode: { x: [0, 1], y: 2 },
-          renderItem: (
-            params: echarts.CustomSeriesRenderItemParams,
-            api: echarts.CustomSeriesRenderItemAPI
-          ) => {
-            const laneIndex = Number(api.value(2))
-            const classIndex = Number(api.value(3))
-            const coordSys = params.coordSys as unknown as {
-              x: number
-              y: number
-              width: number
-              height: number
-            }
-            if (classIndex === LANE_TAG_ITEM) {
-              const lane = qualityLanes[laneIndex]
-              // In the gutter left of the strip, on the lane's centre line, in
-              // the colour of the series it describes — so the strip and the
-              // line above it pair by colour as well as by letter.
-              const centreY = api.coord([
-                api.value(0),
-                laneCount - laneIndex - 0.5,
-              ])[1]
-              const isPrimaryLane = lane?.id === primarySeries?.id
-              const isSecondaryLane = lane?.id === secondarySeries?.id
-              return {
-                type: 'text',
-                style: {
-                  text: lane?.tag ?? '',
-                  x: coordSys.x - LANE_TAG_GAP,
-                  y: centreY,
-                  align: 'right',
-                  verticalAlign: 'middle',
-                  fontSize: 10,
-                  fontWeight: 'bold',
-                  fill: isPrimaryLane
-                    ? primaryColor
-                    : isSecondaryLane
-                      ? secondaryColor
-                      : '#94a3b8',
-                },
-              }
-            }
-            // Lane 0 sits at the top, so it takes the highest band on an axis
-            // that runs 0..laneCount. The 0.08 inset leaves a hairline between
-            // two stacked strips without needing a separate spacer.
-            const topLeft = api.coord([
-              api.value(0),
-              laneCount - laneIndex - 0.08,
-            ])
-            const bottomRight = api.coord([
-              api.value(1),
-              laneCount - laneIndex - 0.92,
-            ])
-            const clipped = echarts.graphic.clipRectByRect(
-              {
-                x: topLeft[0],
-                y: topLeft[1],
-                // Never below a hairline: a run of one reading would otherwise
-                // be a zero-width rect and paint nothing at all.
-                width: Math.max(bottomRight[0] - topLeft[0], 1),
-                height: bottomRight[1] - topLeft[1],
-              },
-              coordSys
-            )
-            if (!clipped) return undefined
-            return {
-              type: 'rect',
-              shape: clipped,
-              style: {
-                fill:
-                  QUALITY_COLORS[
-                    (QUALITY_CLASSES[classIndex] ?? 'none') as QualityClass
-                  ],
-              },
-            }
-          },
-        },
+        buildQualityLaneSeries(qualityLanes, (lane) =>
+          lane.id === primarySeries?.id
+            ? primaryColor
+            : lane.id === secondarySeries?.id
+              ? secondaryColor
+              : '#94a3b8'
+        ),
       ]
     : []
 
@@ -596,7 +725,7 @@ export function buildObservationGraphOption({
                     : ''
                 qualityLine =
                   `<br/><span style="opacity:0.85">${swatch}` +
-                  `${t(QUALITY_LABEL_KEYS[found.qualityClass])}${code}</span>`
+                  `${escapeHtml(qualityLabel(found.qualityClass, entry.qualityScheme, t))}${code}</span>`
               }
             }
             // On the aligned axis the shared header is an offset ("−3d"), which

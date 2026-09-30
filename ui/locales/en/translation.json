@@ -433,6 +433,136 @@
     "none": "Not checked",
     "summary": "{{count}} readings · {{percent}}% pass",
     "no_values_live": "{{count}} readings · no quality values",
-    "no_values_as_of": "{{count}} readings · no quality values as of {{date}}"
+    "no_values_as_of": "{{count}} readings · no quality values as of {{date}}",
+    "rule": "Rule",
+    "rule_fallback": "fallback",
+    "customize": {
+      "button": "Customize resultQuality",
+      "button_edit": "Edit resultQuality rules",
+      "custom_badge": "Custom rules",
+      "title": "Customize resultQuality",
+      "back_to_chart": "Back to chart",
+      "readings_one": "{{count}} reading",
+      "readings_other": "{{count}} readings",
+      "datastream": "Datastream",
+      "datastream_locked": "Save or cancel your changes before switching datastream.",
+      "apply_to": "Apply to",
+      "scope_datastream": "This datastream",
+      "scope_source": "All from this source",
+      "lane_now": "Now",
+      "lane_new": "New",
+      "preview_hint": "Hover the preview to compare a reading under both rule sets.",
+      "no_readings": "No readings in this window to preview. Pick another time range first.",
+      "source": {
+        "datastream": "Your rules for this datastream",
+        "source": "Your rules for this source",
+        "default": "istSOS default"
+      },
+      "steps": {
+        "start": "Start from",
+        "rules": "Rules",
+        "review": "Review and save"
+      },
+      "start": {
+        "question": "Which values does this datastream use for quality?",
+        "current": "Current rules",
+        "current_default": "Current rules (istSOS default)",
+        "current_desc": "Keep what the chart uses now and adjust it.",
+        "explains": "Explains {{hit}} of {{of}} stored values",
+        "best_fit": "Best fit"
+      },
+      "preset": {
+        "istsos": {
+          "name": "istSOS quality index",
+          "desc": "100 is good; 90–93 are the SaQC codes; anything else below 100 is out of range."
+        },
+        "ftp": {
+          "name": "ftp2istsos4 bit pairs",
+          "desc": "3 means all checks OK, 2 a problem, 1 still pending, 0 not run."
+        },
+        "mqtt": {
+          "name": "mqtt2istsos4",
+          "desc": "11 means OK and 0 means not checked. Anything else is suspect."
+        },
+        "blank": {
+          "name": "Blank",
+          "desc": "Start with no rules and write your own."
+        }
+      },
+      "values": {
+        "title": "Stored in this window",
+        "no_value": "no value",
+        "count": "{{count}}×",
+        "add_rule": "+ Rule",
+        "add_rule_aria": "Add a rule for {{value}}",
+        "note_start": "Colours show the verdict under the option you picked. Highlighted rows change verdict.",
+        "note_rules": "+ Rule adds a rule for that exact value at the top of the list."
+      },
+      "rules": {
+        "intro": "Rules are checked from the top. The first match decides the verdict.",
+        "if": "If quality",
+        "and": "and",
+        "mark": "mark it",
+        "op": {
+          "eq": "is",
+          "ne": "is not",
+          "lt": "is below",
+          "le": "is at most",
+          "gt": "is above",
+          "ge": "is at least",
+          "between": "is between",
+          "in": "is one of"
+        },
+        "condition": "Condition",
+        "value": "Value",
+        "from": "From",
+        "to": "To",
+        "values": "Values, separated by commas",
+        "verdict": "Verdict",
+        "move_up": "Move rule up",
+        "move_down": "Move rule down",
+        "delete": "Delete rule",
+        "count_one": "{{count}} reading in this window",
+        "count_other": "{{count}} readings in this window",
+        "incomplete": "Enter a number to turn this rule on.",
+        "shadowed": "Never used: rule {{rules}} already catches every value this rule could match. Move it up or change it.",
+        "empty": "No rules yet. Add one below, or use + Rule next to a stored value.",
+        "add": "+ Add rule",
+        "otherwise": "Any other value",
+        "fallback_tag": "fallback",
+        "no_value": "No value stored",
+        "fixed_tag": "fixed",
+        "no_value_note": "never judged, never counted in the pass rate"
+      },
+      "review": {
+        "pass_rate": "Pass rate",
+        "changed": "Readings that change verdict",
+        "not_checked": "Not checked",
+        "value": "Stored value",
+        "readings": "Readings",
+        "now": "Now",
+        "new": "New",
+        "same": "These rules give the same verdicts as the current ones for every reading in this window.",
+        "saves_to": "Saves to",
+        "saves_datastream": "{{name}} only, in this browser. Nobody else's chart changes.",
+        "saves_source": "Every datastream from {{source}} without rules of its own, in this browser. Nobody else's chart changes.",
+        "labels_title": "Verdict names",
+        "labels_optional": "optional",
+        "labels_note": "Colours stay fixed so the lane reads the same on every chart."
+      },
+      "footer": {
+        "draft_early": "Draft · nothing is saved until the last step",
+        "draft_final": "Draft · saving applies it to the chart right away",
+        "no_changes": "No changes from the rules in use",
+        "cancel": "Cancel",
+        "back": "Back",
+        "next": "Next",
+        "save": "Save rules",
+        "restore": "Restore default",
+        "discard_question": "Discard your unsaved rules?",
+        "keep": "Keep editing",
+        "discard": "Discard"
+      }
+    }
   }
 }

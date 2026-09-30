@@ -12,7 +12,7 @@ import {
 } from '@internationalized/date'
 import dayjs from 'dayjs'
 import utc from 'dayjs/plugin/utc'
-import { useMemo, useState } from 'react'
+import { useMemo, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 
 dayjs.extend(utc)
@@ -27,10 +27,16 @@ import { Datastream, Observation, Thing } from '@/types/domain'
 import {
   buildRows,
   computeChangeRegions,
+  makeSeriesId,
   type ChangeRegion,
   type SeriesSource,
 } from '../lib/observationGraphUtils'
 import type { SnapshotMarker } from '../lib/observationGraphOptions'
+import { useQualitySchemeResolver } from '../lib/useQualitySchemes'
+import CustomizeQualityView, {
+  type CustomizeQualityHandle,
+  type QualityCustomizeTarget,
+} from './customize-quality/CustomizeQualityView'
 import ObservationGraph from './ObservationGraph'
 
 const DAY_MS = 24 * 60 * 60 * 1000
@@ -161,6 +167,29 @@ export default function ChartModal({
   const { t } = useTranslation()
   const timeZone = getLocalTimeZone()
   const isComparingSnapshots = isSnapshot && !!asOfDate && !!compareAsOfDate
+  const resolveScheme = useQualitySchemeResolver()
+
+  /**
+   * Which view the modal body shows. The quality rules editor takes the whole
+   * body rather than sitting beside the chart: the chart's right edge belongs
+   * to the reading details rail, and the modal is already as large as the page
+   * allows, so it trades the chart's height for the editor's instead.
+   */
+  const [view, setView] = useState<'chart' | 'quality'>('chart')
+  const customizeRef = useRef<CustomizeQualityHandle | null>(null)
+  const closeModal = () => {
+    setView('chart')
+    onClose()
+  }
+  // × and Esc step back out of the editor first — through it, so an unsaved
+  // draft is never dropped without asking — and only close from the chart.
+  const requestClose = () => {
+    if (view === 'quality' && customizeRef.current) {
+      customizeRef.current.requestExit()
+      return
+    }
+    closeModal()
+  }
   // While aligned, each snapshot is on its OWN window and no shared range is in
   // effect — so the picker shows its placeholder. Filling it with the primary
   // snapshot's window would contradict the notice inviting the user to pick one,
@@ -266,8 +295,12 @@ export default function ChartModal({
     }
     if (!isComparingSnapshots) return none
 
-    const primaryRows = buildRows(observations)
-    const compareRows = buildRows(comparisonObservations)
+    // One scheme for both sides: they are the same datastream, and judging the
+    // two snapshots under different rules would report a rule change as a
+    // change in the data.
+    const scheme = resolveScheme(datastream).scheme
+    const primaryRows = buildRows(observations, scheme)
+    const compareRows = buildRows(comparisonObservations, scheme)
     if (primaryRows.length === 0) return none
 
     // Aligned mode gives each snapshot its own window, and comparing values at
@@ -289,7 +322,14 @@ export default function ChartModal({
     }
 
     return computeChangeRegions(primaryRows, compareRows)
-  }, [isComparingSnapshots, compareAligned, observations, comparisonObservations])
+  }, [
+    isComparingSnapshots,
+    compareAligned,
+    observations,
+    comparisonObservations,
+    datastream,
+    resolveScheme,
+  ])
 
   const compareUnchanged = compareDiff.unchanged
 
@@ -484,6 +524,52 @@ export default function ChartModal({
     }
     return { start: null, end: null }
   }, [isComparingSnapshots, compareAligned, isAsOfDefaultWindow, start, end])
+  /**
+   * The datastreams the rules editor can write rules for: the ones plotted,
+   * each with the readings on screen. A snapshot comparison is one datastream
+   * seen twice, so only its primary snapshot is offered.
+   */
+  const qualityTargets = useMemo<QualityCustomizeTarget[]>(() => {
+    const keyOf = (ds: Datastream) =>
+      `${String(ds?.__sourceEndpoint ?? '')}::${String(ds?.['@iot.id'] ?? ds?.id ?? '')}`
+    if (!isComparingSnapshots && allSeries.length > 0) {
+      const plotted = allSeries.filter((series) =>
+        activeDatastreamIds.includes(
+          makeSeriesId(
+            String(series.datastream?.['@iot.id'] ?? series.datastream?.id ?? ''),
+            series.asOf
+          )
+        )
+      )
+      return (plotted.length ? plotted : allSeries.slice(0, 1)).map((series) => ({
+        key: keyOf(series.datastream),
+        datastream: series.datastream,
+        observations: series.observations,
+      }))
+    }
+    if (!datastream) return []
+    return [
+      { key: keyOf(datastream), datastream, observations },
+      ...(!isComparingSnapshots && comparisonDatastream
+        ? [
+            {
+              key: keyOf(comparisonDatastream),
+              datastream: comparisonDatastream,
+              observations: comparisonObservations,
+            },
+          ]
+        : []),
+    ]
+  }, [
+    isComparingSnapshots,
+    allSeries,
+    activeDatastreamIds,
+    datastream,
+    observations,
+    comparisonDatastream,
+    comparisonObservations,
+  ])
+
   const thingOptions = things.map((entry) => {
     const key = `${String(entry?.__sourceId ?? entry?.__sourceEndpoint ?? '0')}::${String(
       entry?.['@iot.id'] ?? entry?.id ?? entry?.name ?? ''
@@ -515,7 +601,7 @@ export default function ChartModal({
   return (
     <Modal
       isOpen={isOpen}
-      onOpenChange={(open) => !open && onClose()}
+      onOpenChange={(open) => !open && requestClose()}
       hideCloseButton
       placement="center"
       scrollBehavior="inside"
@@ -535,7 +621,26 @@ export default function ChartModal({
       <ModalContent>
         <ModalHeader className="flex items-center justify-between gap-3 pb-0">
           <div className="min-w-0">
-            <div className="truncate text-base font-semibold">Observations</div>
+            {view === 'quality' ? (
+              // A breadcrumb, so the way back to the chart is where the
+              // title was — and the title still says where the reader is.
+              <div className="flex min-w-0 items-center gap-2 text-base font-semibold">
+                <button
+                  type="button"
+                  className="shrink-0 font-medium text-default-500 hover:text-primary focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary"
+                  title={t('quality.customize.back_to_chart')}
+                  onClick={requestClose}
+                >
+                  Observations
+                </button>
+                <span aria-hidden className="font-normal text-default-400">
+                  ›
+                </span>
+                <span className="truncate">{t('quality.customize.title')}</span>
+              </div>
+            ) : (
+              <div className="truncate text-base font-semibold">Observations</div>
+            )}
           </div>
           {/* Snapshot badge — only visible in As-Of mode */}
           {isSnapshot && asOfDate && (
@@ -559,13 +664,25 @@ export default function ChartModal({
             className="h-6 w-6 min-w-6"
             radius="none"
             variant="light"
-            aria-label={t('general.close')}
-            onPress={onClose}
+            aria-label={
+              view === 'quality'
+                ? t('quality.customize.back_to_chart')
+                : t('general.close')
+            }
+            onPress={requestClose}
           >
             <CloseIcon size={18} />
           </Button>
         </ModalHeader>
         <ModalBody className="h-full overflow-hidden p-4 pt-2">
+          {view === 'quality' ? (
+            <CustomizeQualityView
+              ref={customizeRef}
+              targets={qualityTargets}
+              windowLabel={shownWindowLabel}
+              onExit={() => setView('chart')}
+            />
+          ) : (
           <div className="flex h-full min-h-0 flex-col">
             {/* Three controls in BOTH modes. Comparison used to be a fourth
                 column here, which reflowed and narrowed every other control the
@@ -836,10 +953,14 @@ export default function ChartModal({
                 isCompare={isComparingSnapshots}
                 changeRegions={compareDiff.regions}
                 asOfDate={isSnapshot ? asOfDate : null}
+                onCustomizeQuality={
+                  qualityTargets.length > 0 ? () => setView('quality') : undefined
+                }
                 height="100%"
               />
             </div>
           </div>
+          )}
         </ModalBody>
       </ModalContent>
     </Modal>
