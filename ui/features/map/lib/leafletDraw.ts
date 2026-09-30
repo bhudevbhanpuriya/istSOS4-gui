@@ -11,16 +11,17 @@
 // WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 // See the License for the specific language governing permissions and
 // limitations under the License.
+import { Datastream, Thing } from '@/types/domain'
+import dayjs from 'dayjs'
+import duration from 'dayjs/plugin/duration'
+import utc from 'dayjs/plugin/utc'
+
 import {
   createClusterGroup,
   createThingMarkerIcon,
   createThingMarkerDivIcon,
   showClusterHullPreview,
 } from './leafletCluster'
-import { Datastream, Thing } from '@/types/domain'
-import dayjs from 'dayjs'
-import duration from 'dayjs/plugin/duration'
-import utc from 'dayjs/plugin/utc'
 
 dayjs.extend(duration)
 dayjs.extend(utc)
@@ -137,7 +138,9 @@ function thingSourceKey(thing: Thing) {
 
 function thingSourceLabel(thing: Thing) {
   const sourceName = String(thing?.__sourceName ?? '').trim()
-  const sourceId = String(thing?.__sourceId ?? thing?.__sourceEndpoint ?? '0').trim()
+  const sourceId = String(
+    thing?.__sourceId ?? thing?.__sourceEndpoint ?? '0'
+  ).trim()
 
   if (sourceName) {
     return sourceName
@@ -157,10 +160,15 @@ type ClickableLayer = {
 type TooltipLayer = ClickableLayer & {
   bindTooltip: (mount: HTMLElement, options: Record<string, unknown>) => void
 }
-type BoundsLayer = { getBounds: () => { getCenter: () => { lat: number; lng: number } } }
+type BoundsLayer = {
+  getBounds: () => { getCenter: () => { lat: number; lng: number } }
+}
 type MarkerLike = TooltipLayer & MarkerWithMeta
 type VectorLike = TooltipLayer
-type LayerGroupLike = { addLayer: (layer: unknown) => void; remove?: () => void }
+type LayerGroupLike = {
+  addLayer: (layer: unknown) => void
+  remove?: () => void
+}
 type MarkerWithMeta = {
   __sourceColor?: string
   __freshnessStatus?: FreshnessStatus
@@ -174,7 +182,10 @@ type ClusterEvent = {
     getAllChildMarkers?: () => unknown[]
     getTooltip?: () => unknown
     setTooltipContent?: (content: HTMLElement) => void
-    bindTooltip?: (content: HTMLElement, options: Record<string, unknown>) => void
+    bindTooltip?: (
+      content: HTMLElement,
+      options: Record<string, unknown>
+    ) => void
     openTooltip?: () => void
   } & { getConvexHull?: () => unknown[] }
 }
@@ -267,7 +278,10 @@ function bindSelectThing(
   if (!onThingSelect) return
   layer.on('click', (e: unknown) => {
     const event = e as {
-      originalEvent?: { preventDefault?: () => void; stopPropagation?: () => void }
+      originalEvent?: {
+        preventDefault?: () => void
+        stopPropagation?: () => void
+      }
     }
     event.originalEvent?.preventDefault?.()
     event.originalEvent?.stopPropagation?.()
@@ -332,7 +346,9 @@ function escapeHtml(s: string) {
     .replaceAll("'", '&#39;')
 }
 
-function latestObservationOfDatastream(ds: Datastream): Datastream['Observations'][number] | null {
+function latestObservationOfDatastream(
+  ds: Datastream
+): Datastream['Observations'][number] | null {
   const obsArr = Array.isArray(ds?.Observations) ? ds.Observations : []
   if (!obsArr.length) return null
 
@@ -389,11 +405,6 @@ function datastreamFreshness(
   ds: Datastream,
   referenceMs: number | null
 ): 'fresh' | 'stale' | 'unknown' {
-  const hasObservations = Array.isArray(ds?.Observations)
-    ? ds.Observations.length > 0
-    : false
-  if (!hasObservations) return 'unknown'
-
   const latest = referenceMs !== null ? latestObservationOfDatastream(ds) : null
   const endRaw =
     referenceMs !== null
@@ -459,7 +470,9 @@ export function drawNetworkLayers(args: {
     marker: (...args: unknown[]) => MarkerLike
     divIcon: (...args: unknown[]) => unknown
     polyline: (...args: unknown[]) => VectorLike & BoundsLayer
-    polygon: (...args: unknown[]) => VectorLike & BoundsLayer & { addTo?: (map: unknown) => void }
+    polygon: (
+      ...args: unknown[]
+    ) => VectorLike & BoundsLayer & { addTo?: (map: unknown) => void }
     layerGroup: (...args: unknown[]) => LayerGroupLike
     icon: (...args: unknown[]) => unknown
     markerClusterGroup: (...args: unknown[]) => unknown
@@ -497,7 +510,10 @@ export function drawNetworkLayers(args: {
   enabledRef: { current: Map<string, boolean> }
   didInitVisibilityRef: { current: boolean }
 
-  observedCluster: { clearLayers?: () => void; addLayer: (layer: unknown) => void }
+  observedCluster: {
+    clearLayers?: () => void
+    addLayer: (layer: unknown) => void
+  }
   observedPropertyFilter?: Set<string>
   sourceColorByKey?: Record<string, string>
 
@@ -570,7 +586,10 @@ export function drawNetworkLayers(args: {
   const markerIconFor = (fillColor: string, borderColor: string) => {
     const key = `${fillColor}|${borderColor}`
     if (!markerIconByColor.has(key)) {
-      markerIconByColor.set(key, createThingMarkerIcon(L, fillColor, borderColor))
+      markerIconByColor.set(
+        key,
+        createThingMarkerIcon(L, fillColor, borderColor)
+      )
     }
     return markerIconByColor.get(key)
   }
@@ -638,8 +657,9 @@ export function drawNetworkLayers(args: {
       for (const { ds, text, sourceKey } of observedMatches) {
         const compactLabel = text
 
-        const sourceColor = sourceColorMap.get(sourceKey) ?? SOURCE_COLOR_PALETTE[0]
-        const freshnessStatus = thingFreshnessStatus(thing, referenceMs)
+        const sourceColor =
+          sourceColorMap.get(sourceKey) ?? SOURCE_COLOR_PALETTE[0]
+        const freshnessStatus = datastreamFreshness(ds, referenceMs)
         const borderColor = FRESHNESS_BORDER_COLOR[freshnessStatus]
         const marker = L.marker(centerLL, {
           opacity: hasApproximatePosition(thing) ? APPROXIMATE_OPACITY : 1,
@@ -726,7 +746,10 @@ export function drawNetworkLayers(args: {
       event.layer?.closeTooltip?.()
       showClusterHullPreview({
         L: L as {
-          polygon: (hull: unknown[], options: Record<string, unknown>) => {
+          polygon: (
+            hull: unknown[],
+            options: Record<string, unknown>
+          ) => {
             addTo: (map: unknown) => void
           }
         },
@@ -863,7 +886,6 @@ export function drawNetworkLayers(args: {
           : markerIconFor(base, borderColor),
       })
       ;(m as MarkerWithMeta).__freshnessStatus = freshnessStatus
-
       ;(m as MarkerWithMeta).__tooltipRow = {
         source: thingSourceLabel(thing),
         name: thingDisplayName(thing),

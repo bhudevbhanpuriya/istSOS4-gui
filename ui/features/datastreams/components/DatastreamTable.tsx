@@ -53,6 +53,7 @@ import {
   LocationIcon,
 } from '@/components/icons'
 import TableComponent from '@/components/table/Table'
+import { useAuth } from '@/context/AuthContext'
 import ImportFromFileButton from '@/features/datastreams/components/ImportFromFileButton'
 import HistoryRangeDialog from '@/features/from-to/components/HistoryRangeDialog'
 import { type HistoryWindow } from '@/features/from-to/lib/historyWindow'
@@ -166,6 +167,7 @@ export default function DatastreamTable({
   onDeleteDatastream,
 }: Props) {
   const { t, i18n } = useTranslation()
+  const { canWrite } = useAuth()
   const lang = i18n.resolvedLanguage ?? i18n.language
   const router = useRouter()
   const [pendingDelete, setPendingDelete] = useState<Datastream | null>(null)
@@ -329,6 +331,12 @@ export default function DatastreamTable({
   const renderCell = useCallback(
     (item: Datastream, columnKey: DatastreamColumnKey) => {
       const { start, end, endRaw } = parsePhenomenonTime(item?.phenomenonTime)
+      const locked = isSnapshot || !canWrite
+      const lockedReason = isSnapshot
+        ? t('as_of.table.read_only')
+        : !canWrite
+          ? t('general.read_only')
+          : null
 
       const handleDetails = () => {
         if (onOpenDetails) {
@@ -366,11 +374,7 @@ export default function DatastreamTable({
           return <span>{item?.unitOfMeasurement?.symbol ?? ''}</span>
 
         case 'last': {
-          const hasObservations = Array.isArray(item?.Observations)
-            ? item.Observations.length > 0
-            : false
-
-          if (!hasObservations || !endRaw) {
+          if (!endRaw) {
             return <span>{''}</span>
           }
 
@@ -448,21 +452,20 @@ export default function DatastreamTable({
                   <HistoryIcon size={18} />
                 </Button>
               </Tooltip>
-              {/* In snapshot mode the write actions stay visible but greyed out
-                  and inert, so a row's actions read the same in both modes and
-                  the reason is one hover away. The wrapping span keeps the
-                  tooltip hoverable — a disabled button receives no events. */}
+              {/* In snapshot mode, or without write permission, the write
+                  actions stay visible but greyed out and inert, so a row's
+                  actions read the same everywhere and the reason is one hover
+                  away. The wrapping span keeps the tooltip hoverable — a
+                  disabled button receives no events. */}
               <Tooltip
-                color={isSnapshot ? 'foreground' : 'primary'}
-                content={
-                  isSnapshot ? t('as_of.table.read_only') : t('general.edit')
-                }
+                color={locked ? 'foreground' : 'primary'}
+                content={lockedReason ?? t('general.edit')}
               >
-                <span className={isSnapshot ? 'cursor-not-allowed' : undefined}>
+                <span className={locked ? 'cursor-not-allowed' : undefined}>
                   <Button
                     isIconOnly
-                    isDisabled={isSnapshot}
-                    className={`h-6 w-6 min-w-6 ${isSnapshot ? 'opacity-40' : ''}`}
+                    isDisabled={locked}
+                    className={`h-6 w-6 min-w-6 ${locked ? 'opacity-40' : ''}`}
                     size="sm"
                     variant="light"
                     color="primary"
@@ -473,16 +476,14 @@ export default function DatastreamTable({
                 </span>
               </Tooltip>
               <Tooltip
-                color={isSnapshot ? 'foreground' : 'danger'}
-                content={
-                  isSnapshot ? t('as_of.table.read_only') : t('general.delete')
-                }
+                color={locked ? 'foreground' : 'danger'}
+                content={lockedReason ?? t('general.delete')}
               >
-                <span className={isSnapshot ? 'cursor-not-allowed' : undefined}>
+                <span className={locked ? 'cursor-not-allowed' : undefined}>
                   <Button
                     isIconOnly
-                    isDisabled={isSnapshot}
-                    className={`h-6 w-6 min-w-6 ${isSnapshot ? 'opacity-40' : ''}`}
+                    isDisabled={locked}
+                    className={`h-6 w-6 min-w-6 ${locked ? 'opacity-40' : ''}`}
                     size="sm"
                     variant="light"
                     color="danger"
@@ -499,9 +500,10 @@ export default function DatastreamTable({
           return <span>{''}</span>
       }
     },
-    // isSnapshot decides whether the write actions render disabled, so leaving
-    // it out would keep the cells stale across a snapshot/live switch.
+    // isSnapshot and canWrite decide whether the write actions render disabled,
+    // so leaving either out would keep the cells stale when they change.
     [
+      canWrite,
       isSnapshot,
       lang,
       onDeleteDatastream,
@@ -630,12 +632,14 @@ export default function DatastreamTable({
 
               {!isSnapshot && (
                 <>
-                  <Dropdown>
+                  <Dropdown isDisabled={!canWrite}>
                     <DropdownTrigger>
                       <Button
                         endContent={<ChevronDownIcon size={18} />}
                         size="sm"
                         color="primary"
+                        isDisabled={!canWrite}
+                        title={canWrite ? undefined : t('general.read_only')}
                       >
                         {t('general.new')}
                       </Button>
