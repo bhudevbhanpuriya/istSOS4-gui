@@ -535,5 +535,18 @@
     "summary": "{{count}} readings · {{percent}}% pass",
     "no_values_live": "{{count}} readings · no quality values",
     "no_values_as_of": "{{count}} readings · no quality values as of {{date}}"
+  },
+  "users": {
+    "anonymous": "anonymous",
+    "fallback_label": "User {{id}}",
+    "show_details": "Show user details",
+    "username": "Username",
+    "role": "Role",
+    "id": "ID",
+    "denied": "User details are only visible to signed-in users.",
+    "missing": "This user no longer exists.",
+    "error": "Could not load user details.",
+    "session_expired": "Your session has expired. Sign in again to see user details.",
+    "forbidden": "Only administrators can see user details on this server."
   }
 }

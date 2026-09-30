@@ -535,5 +535,18 @@
     "summary": "{{count}} letture · {{percent}}% valide",
     "no_values_live": "{{count}} letture · nessun valore di qualità",
     "no_values_as_of": "{{count}} letture · nessun valore di qualità al {{date}}"
+  },
+  "users": {
+    "anonymous": "anonimo",
+    "fallback_label": "Utente {{id}}",
+    "show_details": "Mostra dettagli utente",
+    "username": "Nome utente",
+    "role": "Ruolo",
+    "id": "ID",
+    "denied": "I dettagli utente sono visibili solo agli utenti autenticati.",
+    "missing": "Questo utente non esiste più.",
+    "error": "Impossibile caricare i dettagli utente.",
+    "session_expired": "La sessione è scaduta. Accedi di nuovo per vedere i dettagli utente.",
+    "forbidden": "Su questo server solo gli amministratori possono vedere i dettagli utente."
   }
 }
