@@ -835,6 +835,7 @@ export default function ChartModal({
                 alignedAxis={isComparingSnapshots && compareAligned}
                 isCompare={isComparingSnapshots}
                 changeRegions={compareDiff.regions}
+                asOfDate={isSnapshot ? asOfDate : null}
                 height="100%"
               />
             </div>

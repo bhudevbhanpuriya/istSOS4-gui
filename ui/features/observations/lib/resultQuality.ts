@@ -162,19 +162,6 @@ export function tallyQuality(
   return tally
 }
 
-/**
- * Does anything in this window carry a quality value?
- *
- * The lane is hidden entirely when nothing does. Every observation in a stock
- * istSOS deployment has `resultQuality: null`, and a permanently empty grey
- * strip under every chart would be worse than not shipping the lane at all.
- */
-export function hasQualityData(tally: QualityTally): boolean {
-  return (
-    tally.pass + tally.suspect + tally.outlier + tally.range > 0
-  )
-}
-
 /** Readings that carry a verdict — the denominator the pass rate is out of. */
 export function judgedCount(tally: QualityTally): number {
   return tally.pass + tally.suspect + tally.outlier + tally.range

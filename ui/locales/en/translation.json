@@ -533,6 +533,7 @@
     "range": "Out of range",
     "none": "Not checked",
     "summary": "{{count}} readings · {{percent}}% pass",
-    "summary_unchecked": "{{count}} readings · no quality recorded"
+    "no_values_live": "{{count}} readings · no quality values",
+    "no_values_as_of": "{{count}} readings · no quality values as of {{date}}"
   }
 }

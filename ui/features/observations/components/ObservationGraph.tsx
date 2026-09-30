@@ -29,7 +29,6 @@ import {
 } from '../lib/observationGraphOptions'
 import {
   buildQualitySegments,
-  hasQualityData,
   tallyQuality,
 } from '../lib/resultQuality'
 import QualityLegend, { type QualityLegendLane } from './QualityLegend'
@@ -97,6 +96,9 @@ type ObservationGraphProps = {
    *  the eye lands on the change instead of scanning the whole series. Empty
    *  unless comparing over a shared window. */
   changeRegions?: ChangeRegion[]
+  /** ISO-8601 snapshot a single As-Of chart was read at; null for live data.
+   *  Compare mode reads each series' own snapshot instead. */
+  asOfDate?: string | null
 }
 
 export default function ObservationGraph({
@@ -119,6 +121,7 @@ export default function ObservationGraph({
   alignedAxis = false,
   isCompare = false,
   changeRegions = [],
+  asOfDate = null,
 }: ObservationGraphProps) {
   const { t } = useTranslation()
 
@@ -185,31 +188,46 @@ export default function ObservationGraph({
    * Everywhere else a single strip describes the primary line: the chart's other
    * series sit on their own y-axis, and a second unlabelled strip could not be
    * attributed to either of them.
+   *
+   * A strip is drawn even when none of its readings carries a quality value:
+   * it is then one grey "not checked" run, and the legend says so in words, for
+   * the snapshot it was read at. Hiding it instead left a reader unable to tell
+   * "no quality recorded" from "this chart has no quality feature".
    */
   const { qualityLanes, qualityLegendLanes } = useMemo(() => {
     const { primarySeries, secondarySeries } = resolvePrimaryAndSecondarySeries(
       seriesEntries,
       activeDatastreamIds
     )
+    // In compare mode each series carries its own snapshot; otherwise the one
+    // strip describes the chart's snapshot, or live data when there is none.
     const sources = isCompare
       ? [
-          { entry: primarySeries, tag: t('as_of.chart.marker_primary') },
-          { entry: secondarySeries, tag: t('as_of.chart.marker_compare') },
+          {
+            entry: primarySeries,
+            tag: t('as_of.chart.marker_primary'),
+            asOf: primarySeries?.asOf ?? null,
+          },
+          {
+            entry: secondarySeries,
+            tag: t('as_of.chart.marker_compare'),
+            asOf: secondarySeries?.asOf ?? null,
+          },
         ]
-      : [{ entry: primarySeries, tag: undefined as string | undefined }]
+      : [
+          {
+            entry: primarySeries,
+            tag: undefined as string | undefined,
+            asOf: asOfDate,
+          },
+        ]
 
     const lanes: QualityLane[] = []
     const legend: QualityLegendLane[] = []
-    let anyQuality = false
 
-    for (const { entry, tag } of sources) {
+    for (const { entry, tag, asOf } of sources) {
       if (!entry || entry.rows.length === 0) continue
       const tally = tallyQuality(entry.rows)
-      // Gate on the whole set, not this one strip: when comparing a checked
-      // snapshot against one taken before the QC pass ran, the second strip is
-      // entirely "not checked" — and that emptiness IS the finding, so it has
-      // to be drawn rather than dropped for having no verdicts of its own.
-      if (hasQualityData(tally)) anyQuality = true
       lanes.push({
         id: entry.id,
         tag,
@@ -220,12 +238,11 @@ export default function ObservationGraph({
           }))
         ),
       })
-      legend.push({ tag, tally })
+      legend.push({ tag, tally, asOf })
     }
 
-    if (!anyQuality) return { qualityLanes: [], qualityLegendLanes: [] }
     return { qualityLanes: lanes, qualityLegendLanes: legend }
-  }, [seriesEntries, activeDatastreamIds, isCompare, alignedAxis, t])
+  }, [seriesEntries, activeDatastreamIds, isCompare, alignedAxis, asOfDate, t])
 
   /**
    * Open the rail on the reading nearest `axisValue`.

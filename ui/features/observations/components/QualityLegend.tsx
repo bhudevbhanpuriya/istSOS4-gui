@@ -29,6 +29,7 @@
 
 import { useTranslation } from 'react-i18next'
 
+import { formatSnapshotLabel } from '../lib/observationGraphUtils'
 import {
   QUALITY_CLASSES,
   QUALITY_COLORS,
@@ -41,6 +42,8 @@ export type QualityLegendLane = {
   /** Row prefix — "A"/"B" when comparing snapshots, absent when there is one lane. */
   tag?: string
   tally: QualityTally
+  /** ISO-8601 snapshot the lane was read at; null for live data. */
+  asOf?: string | null
 }
 
 export default function QualityLegend({
@@ -64,13 +67,20 @@ export default function QualityLegend({
         if (total === 0) return null
         const judged = judgedCount(lane.tally)
         // "0% pass" would be a verdict. A window nothing has checked has not
-        // failed — it has not been judged, and the summary has to say so.
+        // failed — it has not been judged, and the summary has to say so, for
+        // the snapshot it describes: a snapshot taken before a QC pass ran has
+        // no values even though live data may.
         const summary = judged
           ? t('quality.summary', {
               count: total,
               percent: Math.round((lane.tally.pass / judged) * 100),
             })
-          : t('quality.summary_unchecked', { count: total })
+          : lane.asOf
+            ? t('quality.no_values_as_of', {
+                count: total,
+                date: formatSnapshotLabel(lane.asOf),
+              })
+            : t('quality.no_values_live', { count: total })
 
         return (
           <div
