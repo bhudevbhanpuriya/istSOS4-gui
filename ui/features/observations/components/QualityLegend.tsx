@@ -39,8 +39,10 @@ import {
 } from '../lib/resultQuality'
 
 export type QualityLegendLane = {
-  /** Row prefix — "A"/"B" when comparing snapshots, absent when there is one lane. */
+  /** Row prefix — "A"/"B"/"C"… when there are several lanes, absent when there is one. */
   tag?: string
+  /** What the tag stands for — the plotted property, when lanes are lettered by series. */
+  label?: string
   tally: QualityTally
   /** ISO-8601 snapshot the lane was read at; null for live data. */
   asOf?: string | null
@@ -89,6 +91,7 @@ export default function QualityLegend({
           >
             <span className="font-semibold tabular-nums">
               {lane.tag ? `${lane.tag} — ` : ''}
+              {lane.label ? `${lane.label}: ` : ''}
               {summary}
             </span>
             {QUALITY_CLASSES.filter((key) => lane.tally[key] > 0).map((key) => (
