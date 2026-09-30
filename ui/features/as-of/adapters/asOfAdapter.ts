@@ -51,6 +51,8 @@ export type AsOfCommit = {
   /** ISO-8601 UTC datetime of this commit */
   authoredAt: string
   message: string
+  /** The commit's `author` URI, e.g. `/Users(1)`; absent when unknown. */
+  author?: string
 }
 
 export type ExistenceState = 'exists' | 'not-yet-created' | 'deleted'
@@ -334,6 +336,8 @@ type BackendCommit = {
   /** ISO date string — maps to AsOfCommit.authoredAt */
   date: string
   actionType: string
+  /** The committing user's `uri`, e.g. `/Users(1)`, or `anonymous`. */
+  author?: string
 }
 
 const asOfThingApiPath = `${normalizedBasePath}/api/as-of/thing`
@@ -514,6 +518,7 @@ const apiAdapter: AsOfAdapter = {
         // Commit messages are free text from the backend and are not
         // translated; this stand-in matches that.
         message: version.commit?.message ?? 'Changed',
+        author: version.commit?.author,
       }))
 
     const ticks = versionTicks.length
@@ -525,6 +530,7 @@ const apiAdapter: AsOfAdapter = {
             // Backend field is `date`, our type uses `authoredAt`
             authoredAt: commit.date,
             message: commit.message,
+            author: commit.author,
           }))
 
     // Where the Thing stood changes without a Thing version (see
@@ -554,6 +560,7 @@ const apiAdapter: AsOfAdapter = {
         authoredAt: change.at,
         // Free backend text, like the version ticks above.
         message: change.commit?.message ?? 'Location changed',
+        author: change.commit?.author,
       })
     }
 

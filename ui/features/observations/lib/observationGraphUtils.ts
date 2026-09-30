@@ -50,6 +50,11 @@ export type GraphSeriesEntry = {
    * different 7-day windows on top of each other.
    */
   anchorTs?: number | null
+  /**
+   * Data source the datastream was read from, so a commit author on one of its
+   * readings is looked up where that user exists. Null means the primary one.
+   */
+  endpoint?: string | null
 }
 
 /** One fetched series, before it is turned into a `GraphSeriesEntry`. */
@@ -301,6 +306,7 @@ export function buildSeriesEntries({
         rows: buildRows(entry?.observations),
         asOf,
         anchorTs: anchorIso ? dayjs.utc(anchorIso).valueOf() : null,
+        endpoint: ds?.__sourceEndpoint ?? null,
       }
     })
   }
@@ -312,6 +318,7 @@ export function buildSeriesEntries({
       unit: String(datastream?.unitOfMeasurement?.symbol ?? ''),
       observedProperty: String(datastream?.ObservedProperty?.name ?? ''),
       rows: chartData,
+      endpoint: datastream?.__sourceEndpoint ?? null,
     },
     ...(comparisonDatastream
       ? [
@@ -327,6 +334,7 @@ export function buildSeriesEntries({
               comparisonDatastream?.ObservedProperty?.name ?? ''
             ),
             rows: comparisonChartData,
+            endpoint: comparisonDatastream?.__sourceEndpoint ?? null,
           },
         ]
       : []),

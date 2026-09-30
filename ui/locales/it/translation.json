@@ -401,7 +401,8 @@
       "now": "Ora",
       "before_range": "La data precede l'intervallo navigabile",
       "after_range": "La data supera l'intervallo navigabile",
-      "aria_label": "Cursore temporale"
+      "aria_label": "Cursore temporale",
+      "by": "di"
     },
     "existence": {
       "no_data_before": "Nessun dato prima di questa data",
