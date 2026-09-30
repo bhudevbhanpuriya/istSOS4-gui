@@ -432,6 +432,7 @@
     "range": "Fuori intervallo",
     "none": "Non verificato",
     "summary": "{{count}} letture · {{percent}}% valide",
-    "summary_unchecked": "{{count}} letture · nessuna qualità registrata"
+    "no_values_live": "{{count}} letture · nessun valore di qualità",
+    "no_values_as_of": "{{count}} letture · nessun valore di qualità al {{date}}"
   }
 }
