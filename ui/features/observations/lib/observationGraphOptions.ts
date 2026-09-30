@@ -130,25 +130,20 @@ export function syncLaneGridToPlotGrid(chart: echarts.EChartsType): void {
  * markLine right here on this chart), so an amber *series* reads as chrome
  * rather than as data.
  *
- * A near-black slate, chosen for how it reads against the teal primary.
- * Separation from teal is wide under every simulated colour-vision deficiency
- * (worst-case ΔE 27.0, against an 8.0 floor), and on this white surface it
- * clears the 3:1 contrast floor for a mark several times over, so B needs no
- * extra weight to stay legible.
- *
- * An earlier light orange was dropped: it collided with the amber above rather
- * than separating from it, which is the one thing this colour must not do.
+ * A light orange, chosen for how it reads against the teal primary. Separation
+ * from teal is comfortable (worst-case CVD ΔE 16.4, normal-vision 31.2), but at
+ * 2.2:1 it sits under the 3:1 floor for a mark on this white surface.
+ * `#ea580c` is the drop-in if it ever needs to clear 3:1 on its own.
  */
-const COMPARE_B_COLOR = '#1e293b'
+const COMPARE_B_COLOR = '#fb923c'
 
 /**
  * B's stroke in compare mode.
  *
- * B is the *reference* being checked against, so it sits under A, thinner and
- * slightly transparent. The payoff is that agreement and disagreement look
- * different without reading anything: where the snapshots match, B hides
- * exactly under A and the chart shows one clean line; where they diverge, B
- * separates out and becomes visible on its own.
+ * B is the *reference* being checked against, so it is thinner, slightly
+ * transparent and dashed, drawn on top of A. Where the snapshots match, B's
+ * dashes ride along A's line; where they diverge, B separates out and becomes
+ * visible on its own.
  */
 const COMPARE_B_WIDTH = 1.5
 const COMPARE_B_OPACITY = 0.9

@@ -59,6 +59,7 @@ import {
   plottedX,
   resolvePrimaryAndSecondarySeries,
   type ChangeRegion,
+  type GraphSeriesEntry,
   type SeriesSource,
 } from '../lib/observationGraphUtils'
 
@@ -185,9 +186,10 @@ export default function ObservationGraph({
    *
    * Compare mode plots one datastream at two snapshots and already labels them
    * A and B on the markLine, so both get a strip under those same names.
-   * Everywhere else a single strip describes the primary line: the chart's other
-   * series sit on their own y-axis, and a second unlabelled strip could not be
-   * attributed to either of them.
+   * Everywhere else each plotted series gets its own strip, lettered A, B, C…
+   * in plotting order, and the legend row spells out which property each
+   * letter stands for. A lone series stays unlettered, as there is nothing to
+   * tell it apart from.
    *
    * A strip is drawn even when none of its readings carries a quality value:
    * it is then one grey "not checked" run, and the legend says so in words, for
@@ -199,33 +201,47 @@ export default function ObservationGraph({
       seriesEntries,
       activeDatastreamIds
     )
-    // In compare mode each series carries its own snapshot; otherwise the one
+    // In compare mode each series carries its own snapshot; otherwise every
     // strip describes the chart's snapshot, or live data when there is none.
-    const sources = isCompare
-      ? [
-          {
-            entry: primarySeries,
-            tag: t('as_of.chart.marker_primary'),
-            asOf: primarySeries?.asOf ?? null,
-          },
-          {
-            entry: secondarySeries,
-            tag: t('as_of.chart.marker_compare'),
-            asOf: secondarySeries?.asOf ?? null,
-          },
-        ]
-      : [
-          {
-            entry: primarySeries,
-            tag: undefined as string | undefined,
-            asOf: asOfDate,
-          },
-        ]
+    let sources: {
+      entry: GraphSeriesEntry | null | undefined
+      tag?: string
+      label?: string
+      asOf: string | null
+    }[]
+    if (isCompare) {
+      sources = [
+        {
+          entry: primarySeries,
+          tag: t('as_of.chart.marker_primary'),
+          asOf: primarySeries?.asOf ?? null,
+        },
+        {
+          entry: secondarySeries,
+          tag: t('as_of.chart.marker_compare'),
+          asOf: secondarySeries?.asOf ?? null,
+        },
+      ]
+    } else {
+      const plotted = seriesEntries.filter((entry) =>
+        activeDatastreamIds.includes(entry.id)
+      )
+      const shown = plotted.length ? plotted : [primarySeries]
+      const lettered = shown.length > 1
+      sources = shown.map((entry, index) => ({
+        entry,
+        tag: lettered ? String.fromCharCode(65 + index) : undefined,
+        label: lettered
+          ? entry?.observedProperty || entry?.name || undefined
+          : undefined,
+        asOf: asOfDate,
+      }))
+    }
 
     const lanes: QualityLane[] = []
     const legend: QualityLegendLane[] = []
 
-    for (const { entry, tag, asOf } of sources) {
+    for (const { entry, tag, label, asOf } of sources) {
       if (!entry || entry.rows.length === 0) continue
       const tally = tallyQuality(entry.rows)
       lanes.push({
@@ -238,7 +254,7 @@ export default function ObservationGraph({
           }))
         ),
       })
-      legend.push({ tag, tally, asOf })
+      legend.push({ tag, label, tally, asOf })
     }
 
     return { qualityLanes: lanes, qualityLegendLanes: legend }
