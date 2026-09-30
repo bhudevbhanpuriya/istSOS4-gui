@@ -534,6 +534,136 @@
     "none": "Non verificato",
     "summary": "{{count}} letture · {{percent}}% valide",
     "no_values_live": "{{count}} letture · nessun valore di qualità",
-    "no_values_as_of": "{{count}} letture · nessun valore di qualità al {{date}}"
+    "no_values_as_of": "{{count}} letture · nessun valore di qualità al {{date}}",
+    "rule": "Regola",
+    "rule_fallback": "predefinita",
+    "customize": {
+      "button": "Personalizza resultQuality",
+      "button_edit": "Modifica regole resultQuality",
+      "custom_badge": "Regole personalizzate",
+      "title": "Personalizza resultQuality",
+      "back_to_chart": "Torna al grafico",
+      "readings_one": "{{count}} lettura",
+      "readings_other": "{{count}} letture",
+      "datastream": "Datastream",
+      "datastream_locked": "Salva o annulla le modifiche prima di cambiare datastream.",
+      "apply_to": "Applica a",
+      "scope_datastream": "Questo datastream",
+      "scope_source": "Tutti da questa sorgente",
+      "lane_now": "Ora",
+      "lane_new": "Nuove",
+      "preview_hint": "Passa sull'anteprima per confrontare una lettura con entrambe le regole.",
+      "no_readings": "Nessuna lettura da mostrare in questo intervallo. Scegli prima un altro intervallo di tempo.",
+      "source": {
+        "datastream": "Le tue regole per questo datastream",
+        "source": "Le tue regole per questa sorgente",
+        "default": "Predefinito istSOS"
+      },
+      "steps": {
+        "start": "Punto di partenza",
+        "rules": "Regole",
+        "review": "Rivedi e salva"
+      },
+      "start": {
+        "question": "Quali valori usa questo datastream per la qualità?",
+        "current": "Regole attuali",
+        "current_default": "Regole attuali (predefinito istSOS)",
+        "current_desc": "Parti da ciò che il grafico usa ora e modificalo.",
+        "explains": "Spiega {{hit}} valori salvati su {{of}}",
+        "best_fit": "Più adatto"
+      },
+      "preset": {
+        "istsos": {
+          "name": "Indice di qualità istSOS",
+          "desc": "100 è valido; 90–93 sono i codici SaQC; ogni altro valore sotto 100 è fuori intervallo."
+        },
+        "ftp": {
+          "name": "Coppie di bit ftp2istsos4",
+          "desc": "3 indica tutti i controlli superati, 2 un problema, 1 in attesa, 0 non eseguito."
+        },
+        "mqtt": {
+          "name": "mqtt2istsos4",
+          "desc": "11 indica valido e 0 non verificato. Ogni altro valore è sospetto."
+        },
+        "blank": {
+          "name": "Vuoto",
+          "desc": "Parti senza regole e scrivi le tue."
+        }
+      },
+      "values": {
+        "title": "Salvati in questo intervallo",
+        "no_value": "nessun valore",
+        "count": "{{count}}×",
+        "add_rule": "+ Regola",
+        "add_rule_aria": "Aggiungi una regola per {{value}}",
+        "note_start": "I colori mostrano il giudizio con l'opzione scelta. Le righe evidenziate cambiano giudizio.",
+        "note_rules": "+ Regola aggiunge in cima una regola per quel valore esatto."
+      },
+      "rules": {
+        "intro": "Le regole sono verificate dall'alto. La prima che corrisponde decide il giudizio.",
+        "if": "Se la qualità",
+        "and": "e",
+        "mark": "segnala come",
+        "op": {
+          "eq": "è",
+          "ne": "non è",
+          "lt": "è minore di",
+          "le": "è al massimo",
+          "gt": "è maggiore di",
+          "ge": "è almeno",
+          "between": "è tra",
+          "in": "è uno tra"
+        },
+        "condition": "Condizione",
+        "value": "Valore",
+        "from": "Da",
+        "to": "A",
+        "values": "Valori, separati da virgole",
+        "verdict": "Giudizio",
+        "move_up": "Sposta la regola in alto",
+        "move_down": "Sposta la regola in basso",
+        "delete": "Elimina la regola",
+        "count_one": "{{count}} lettura in questo intervallo",
+        "count_other": "{{count}} letture in questo intervallo",
+        "incomplete": "Inserisci un numero per attivare questa regola.",
+        "shadowed": "Mai usata: la regola {{rules}} intercetta già ogni valore di questa regola. Spostala più in alto o modificala.",
+        "empty": "Ancora nessuna regola. Aggiungine una qui sotto, o usa + Regola accanto a un valore salvato.",
+        "add": "+ Aggiungi regola",
+        "otherwise": "Qualsiasi altro valore",
+        "fallback_tag": "predefinita",
+        "no_value": "Nessun valore salvato",
+        "fixed_tag": "fissa",
+        "no_value_note": "mai giudicato, mai contato nella percentuale di validità"
+      },
+      "review": {
+        "pass_rate": "Percentuale valide",
+        "changed": "Letture che cambiano giudizio",
+        "not_checked": "Non verificate",
+        "value": "Valore salvato",
+        "readings": "Letture",
+        "now": "Ora",
+        "new": "Nuove",
+        "same": "Queste regole danno gli stessi giudizi di quelle attuali per ogni lettura in questo intervallo.",
+        "saves_to": "Salva in",
+        "saves_datastream": "Solo {{name}}, in questo browser. I grafici degli altri utenti non cambiano.",
+        "saves_source": "Ogni datastream da {{source}} senza regole proprie, in questo browser. I grafici degli altri utenti non cambiano.",
+        "labels_title": "Nomi dei giudizi",
+        "labels_optional": "facoltativo",
+        "labels_note": "I colori restano fissi, così la fascia si legge allo stesso modo in ogni grafico."
+      },
+      "footer": {
+        "draft_early": "Bozza · nulla viene salvato fino all'ultimo passo",
+        "draft_final": "Bozza · il salvataggio la applica subito al grafico",
+        "no_changes": "Nessuna modifica rispetto alle regole in uso",
+        "cancel": "Annulla",
+        "back": "Indietro",
+        "next": "Avanti",
+        "save": "Salva regole",
+        "restore": "Ripristina predefinito",
+        "discard_question": "Scartare le regole non salvate?",
+        "keep": "Continua a modificare",
+        "discard": "Scarta"
+      }
+    }
   }
 }

@@ -28,9 +28,11 @@
  * the only one shipped in this project: `ftp2istsos4` packs two bits per check
  * and sends "3" to mean "every check passed", while `mqtt2istsos4` sends "11".
  * Under the index below both would classify as OUT_OF_RANGE. Nothing in a stored
- * value distinguishes the scales, so one had to be assumed; this module is
- * deliberately the only file that assumes it, so that supporting the others
- * later is a change here rather than a hunt through the chart code.
+ * value distinguishes the scales, so the viewer can say which one a datastream
+ * uses: a `QualityScheme` is an ordered list of rules, and the istSOS index is
+ * simply the scheme used when nobody has chosen another. This module is still
+ * the only file that knows what a value means — callers hand it a scheme, they
+ * never test a code themselves.
  */
 
 /** At or above this, the reading passed. The whole convention, in one constant. */
@@ -126,26 +128,296 @@ export function parseResultQuality(raw: unknown): number | null {
   return null
 }
 
-/** Where an index sits on the lane. */
-export function classifyQuality(index: number | null): QualityClass {
-  if (index === null) return 'none'
-  if (index >= QUALITY_PASS) return 'pass'
-  if (index === QUALITY_CODES.OUT_OF_RANGE) return 'range'
-  if (index === QUALITY_CODES.OUTLIER) return 'outlier'
-  if (
-    index === QUALITY_CODES.MISSING ||
-    index === QUALITY_CODES.CONSTANT
-  ) {
-    return 'suspect'
+/** How a rule compares a reading's index with its own value(s). */
+export type QualityOp =
+  | 'eq'
+  | 'ne'
+  | 'lt'
+  | 'le'
+  | 'gt'
+  | 'ge'
+  | 'between'
+  | 'in'
+
+export const QUALITY_OPS: QualityOp[] = [
+  'eq',
+  'ne',
+  'lt',
+  'le',
+  'gt',
+  'ge',
+  'between',
+  'in',
+]
+
+/**
+ * One line of a scheme: "if the index <op> <value>, the reading is <verdict>".
+ *
+ * `verdict` may be `none`: some ingests store a value that means "this check
+ * was not run" (ftp2istsos4's 0), and that reading has not been judged any more
+ * than one with no value at all.
+ */
+export type QualityRule = {
+  op: QualityOp
+  /** The compared value; the lower bound for `between`. Null while unset. */
+  value: number | null
+  /** `between` only — the upper bound, inclusive. */
+  max?: number | null
+  /** `in` only. */
+  values?: number[]
+  verdict: QualityClass
+}
+
+/**
+ * What a datastream's quality values mean.
+ *
+ * Rules are tried in order and the first match decides. A value no rule
+ * matches gets `fallback`, which is always a verdict: an index that is present
+ * but unexplained is still a reading someone flagged, and dropping it to "not
+ * checked" would hide it. A reading with NO index is never judged, whatever the
+ * scheme says — that rule is not in the list because it is not negotiable.
+ */
+export type QualityScheme = {
+  version: 1
+  rules: QualityRule[]
+  fallback: Exclude<QualityClass, 'none'>
+  /** Viewer's own names for the verdicts. The colours never change with them. */
+  labels?: Partial<Record<QualityClass, string>>
+}
+
+/**
+ * The istSOS quality index, as a scheme.
+ *
+ * Exactly the classifier this module shipped before schemes existed: 100 and
+ * above passes, 90–93 are the SaQC codes, and anything else below 100 is a
+ * failure.
+ */
+export const ISTSOS_QUALITY_SCHEME: QualityScheme = {
+  version: 1,
+  rules: [
+    { op: 'ge', value: QUALITY_PASS, verdict: 'pass' },
+    { op: 'eq', value: QUALITY_CODES.OUT_OF_RANGE, verdict: 'range' },
+    { op: 'eq', value: QUALITY_CODES.OUTLIER, verdict: 'outlier' },
+    {
+      op: 'in',
+      value: null,
+      values: [QUALITY_CODES.MISSING, QUALITY_CODES.CONSTANT],
+      verdict: 'suspect',
+    },
+  ],
+  fallback: 'range',
+}
+
+/**
+ * Starting points for the conventions this project itself ships.
+ *
+ * ftp2istsos4 packs two bits per check (11 OK, 10 problem, 01 remaining, 00 not
+ * executed) and sends the decimal, so one check reads 3/2/1/0. mqtt2istsos4
+ * sends the literal "11" for OK; its "00" cannot be stored at all (leading zeros
+ * are not JSON), so 0 is what reaches the column.
+ */
+export const QUALITY_PRESETS = {
+  istsos: ISTSOS_QUALITY_SCHEME,
+  ftp: {
+    version: 1,
+    rules: [
+      { op: 'eq', value: 3, verdict: 'pass' },
+      { op: 'eq', value: 1, verdict: 'suspect' },
+      { op: 'eq', value: 2, verdict: 'range' },
+      { op: 'eq', value: 0, verdict: 'none' },
+    ],
+    fallback: 'suspect',
+  },
+  mqtt: {
+    version: 1,
+    rules: [
+      { op: 'eq', value: 11, verdict: 'pass' },
+      { op: 'eq', value: 0, verdict: 'none' },
+    ],
+    fallback: 'suspect',
+  },
+  blank: { version: 1, rules: [], fallback: 'suspect' },
+} satisfies Record<string, QualityScheme>
+
+export type QualityPresetKey = keyof typeof QUALITY_PRESETS
+
+/** A rule that can be evaluated — its operands are filled in. */
+export function isRuleComplete(rule: QualityRule): boolean {
+  if (rule.op === 'in') return (rule.values?.length ?? 0) > 0
+  if (rule.value === null || !Number.isFinite(rule.value)) return false
+  if (rule.op === 'between') {
+    return rule.max != null && Number.isFinite(rule.max)
   }
-  // Below the pass mark but not one of the codes this project writes: still a
-  // failure, and saying so is more useful than dropping it to "not checked".
-  return 'range'
+  return true
+}
+
+function ruleMatches(rule: QualityRule, index: number): boolean {
+  const value = rule.value as number
+  switch (rule.op) {
+    case 'eq':
+      return index === value
+    case 'ne':
+      return index !== value
+    case 'lt':
+      return index < value
+    case 'le':
+      return index <= value
+    case 'gt':
+      return index > value
+    case 'ge':
+      return index >= value
+    case 'between': {
+      const max = rule.max as number
+      return index >= Math.min(value, max) && index <= Math.max(value, max)
+    }
+    case 'in':
+      return (rule.values ?? []).includes(index)
+  }
+}
+
+/**
+ * Which rule decided an index: its position in the scheme, `'fallback'` when no
+ * rule matched, or `'unset'` when there was no index to judge.
+ */
+export type QualityRuleRef = number | 'fallback' | 'unset'
+
+export type QualityMatch = {
+  qualityClass: QualityClass
+  rule: QualityRuleRef
+}
+
+/** Judge an index under a scheme, and say which rule did it. */
+export function matchQuality(
+  index: number | null,
+  scheme: QualityScheme = ISTSOS_QUALITY_SCHEME
+): QualityMatch {
+  if (index === null) return { qualityClass: 'none', rule: 'unset' }
+  for (let i = 0; i < scheme.rules.length; i++) {
+    const rule = scheme.rules[i]
+    if (isRuleComplete(rule) && ruleMatches(rule, index)) {
+      return { qualityClass: rule.verdict, rule: i }
+    }
+  }
+  return { qualityClass: scheme.fallback, rule: 'fallback' }
+}
+
+/** Where an index sits on the lane. */
+export function classifyQuality(
+  index: number | null,
+  scheme: QualityScheme = ISTSOS_QUALITY_SCHEME
+): QualityClass {
+  return matchQuality(index, scheme).qualityClass
 }
 
 /** Convenience for callers holding a raw value. */
-export function qualityClassOf(raw: unknown): QualityClass {
-  return classifyQuality(parseResultQuality(raw))
+export function qualityClassOf(
+  raw: unknown,
+  scheme: QualityScheme = ISTSOS_QUALITY_SCHEME
+): QualityClass {
+  return classifyQuality(parseResultQuality(raw), scheme)
+}
+
+/**
+ * Indexes that stand for every region of the number line the scheme's rules
+ * distinguish.
+ *
+ * Every operator is constant between two consecutive thresholds, so testing
+ * each threshold, each midpoint between two, and one point past either end
+ * covers every case a rule can tell apart. That makes the reachability check
+ * below exact rather than a sample.
+ */
+function representativeIndexes(scheme: QualityScheme): number[] {
+  const thresholds = new Set<number>()
+  for (const rule of scheme.rules) {
+    if (!isRuleComplete(rule)) continue
+    if (rule.op === 'in') {
+      for (const value of rule.values ?? []) thresholds.add(value)
+      continue
+    }
+    thresholds.add(rule.value as number)
+    if (rule.op === 'between') thresholds.add(rule.max as number)
+  }
+  const sorted = [...thresholds].sort((a, b) => a - b)
+  if (sorted.length === 0) return [0]
+  const points = [sorted[0] - 1, sorted[sorted.length - 1] + 1]
+  for (let i = 0; i < sorted.length; i++) {
+    points.push(sorted[i])
+    if (i < sorted.length - 1) points.push((sorted[i] + sorted[i + 1]) / 2)
+  }
+  return points
+}
+
+/**
+ * For each rule, the earlier rules that together catch every index it could
+ * match — so it can never decide anything — or null when it is reachable.
+ *
+ * Returned as 0-based positions. An incomplete rule is reported as reachable:
+ * it is flagged for its missing operand instead.
+ */
+export function findShadowedRules(scheme: QualityScheme): (number[] | null)[] {
+  const points = representativeIndexes(scheme)
+  return scheme.rules.map((rule, index) => {
+    if (!isRuleComplete(rule)) return null
+    const earlier = new Set<number>()
+    for (const point of points) {
+      if (!ruleMatches(rule, point)) continue
+      const catcher = scheme.rules
+        .slice(0, index)
+        .findIndex((other) => isRuleComplete(other) && ruleMatches(other, point))
+      if (catcher === -1) return null
+      earlier.add(catcher)
+    }
+    return earlier.size > 0 ? [...earlier].sort((a, b) => a - b) : null
+  })
+}
+
+/** Two schemes that judge every reading the same way and name verdicts alike. */
+export function sameQualityScheme(a: QualityScheme, b: QualityScheme): boolean {
+  return JSON.stringify(normalizeScheme(a)) === JSON.stringify(normalizeScheme(b))
+}
+
+function normalizeScheme(scheme: QualityScheme) {
+  const labels = Object.fromEntries(
+    Object.entries(scheme.labels ?? {})
+      .filter(([, label]) => !!label?.trim())
+      .sort(([a], [b]) => a.localeCompare(b))
+  )
+  return {
+    rules: scheme.rules.map((rule) => ({
+      op: rule.op,
+      value: rule.op === 'in' ? null : rule.value,
+      max: rule.op === 'between' ? (rule.max ?? null) : null,
+      values: rule.op === 'in' ? (rule.values ?? []) : null,
+      verdict: rule.verdict,
+    })),
+    fallback: scheme.fallback,
+    labels,
+  }
+}
+
+/** A rule's condition in symbols ("≤ 95", "90–93", "∈ 90, 91"), for tight spots. */
+export function describeRuleCondition(rule: QualityRule): string {
+  const symbols: Record<Exclude<QualityOp, 'between' | 'in'>, string> = {
+    eq: '=',
+    ne: '≠',
+    lt: '<',
+    le: '≤',
+    gt: '>',
+    ge: '≥',
+  }
+  if (rule.op === 'in') return `∈ ${(rule.values ?? []).join(', ')}`
+  if (rule.op === 'between') return `${rule.value ?? '?'}–${rule.max ?? '?'}`
+  return `${symbols[rule.op]} ${rule.value ?? '?'}`
+}
+
+/** A verdict's display name under a scheme: the viewer's own, else the stock one. */
+export function qualityLabel(
+  qualityClass: QualityClass,
+  scheme: QualityScheme | null | undefined,
+  t: (key: string) => string
+): string {
+  const custom = scheme?.labels?.[qualityClass]?.trim()
+  return custom || t(QUALITY_LABEL_KEYS[qualityClass])
 }
 
 export type QualityTally = Record<QualityClass, number>
