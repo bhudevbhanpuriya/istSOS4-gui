@@ -402,19 +402,8 @@ export default function HistoryPage({
             />
 
             <div className="min-w-0">
-              <VersionTimeline
-                versions={versions}
-                windowEnd={window!.to}
-                indexA={indexA}
-                indexB={indexB}
-                onPick={pickVersion}
-              />
-
-              <VersionDetail
-                version={versions[indexB]}
-                presentLabel={t('from_to.page.present')}
-              />
-
+              {/* The compare row leads: it is the one control for choosing the
+                  two sides, and the timeline below only shows where they sit. */}
               <CompareBar
                 versions={versions}
                 indexA={indexA}
@@ -426,6 +415,18 @@ export default function HistoryPage({
                 showUnchanged={showUnchanged}
                 onToggleUnchanged={() => setShowUnchanged((on) => !on)}
                 changedCount={changed.length}
+              />
+
+              <VersionTimeline
+                versions={versions}
+                windowEnd={window!.to}
+                indexA={indexA}
+                indexB={indexB}
+              />
+
+              <VersionDetail
+                version={versions[indexB]}
+                presentLabel={t('from_to.page.present')}
               />
 
               <VersionDiff

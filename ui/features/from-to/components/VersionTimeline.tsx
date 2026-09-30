@@ -24,9 +24,8 @@
  * target — see `timelineBands`. The true duration is printed on every band, so
  * the floor never misleads about how long a version actually lasted.
  *
- * Clicking a band selects it as the right-hand side of the comparison and
- * pushes the previous right-hand side to the left, which is how a reader walks
- * forward through a history one step at a time.
+ * The bands are display only: they mark where sides A and B sit, but choosing
+ * the sides belongs to the compare row, so there is one place to do it.
  */
 
 import dayjs from 'dayjs'
@@ -59,7 +58,6 @@ export type VersionTimelineProps = {
   windowEnd: string
   indexA: number
   indexB: number
-  onPick: (index: number) => void
 }
 
 export default function VersionTimeline({
@@ -67,7 +65,6 @@ export default function VersionTimeline({
   windowEnd,
   indexA,
   indexB,
-  onPick,
 }: VersionTimelineProps) {
   const { t } = useTranslation()
 
@@ -102,41 +99,43 @@ export default function VersionTimeline({
           const open = version.validity.end === null
 
           return (
-            <button
+            <div
               key={versionKey(version)}
-              type="button"
-              onClick={() => onPick(index)}
               // A floor in pixels as well as percent: at a hundred versions the
               // percentage alone rounds to less than the band's own padding,
-              // and a band too small to click is not a control.
+              // and the band's label would no longer fit.
               style={{ width: `${widths[index]}%`, minWidth: 34, flex: '0 0 auto' }}
-              aria-label={t('from_to.timeline.band_label', {
+              title={t('from_to.timeline.band_label', {
                 number: index + 1,
                 start: version.validity.start,
               })}
-              aria-pressed={isB}
               className={[
-                'relative min-w-0 rounded-lg border border-t-[3px] px-2 pb-2 pt-1.5 text-left transition-colors',
+                'min-w-0 rounded-lg border border-t-[3px] px-2 pb-2 pt-1.5 text-left',
                 stripeFor(version.commit?.actionType),
                 isB
                   ? 'border-primary bg-primary/10 ring-1 ring-primary'
                   : isA
                     ? 'border-default-400 bg-default-100'
-                    : 'border-default-200 hover:bg-default-100',
+                    : 'border-default-200',
               ].join(' ')}
             >
-              {(isA || isB) && (
-                <span
-                  className={[
-                    'absolute -top-2.5 right-1 rounded px-1 font-mono text-[9px] font-bold leading-[14px] text-white',
-                    isB ? 'bg-primary' : 'bg-default-500',
-                  ].join(' ')}
-                >
-                  {isB ? 'B' : 'A'}
+              {/* The side chip sits inline beside the title: hung above the
+                  band it was clipped by the scrolling track. It comes first
+                  so a narrow band truncates the title, never the chip. */}
+              <span className="flex min-w-0 items-center gap-1">
+                {(isA || isB) && (
+                  <span
+                    className={[
+                      'shrink-0 rounded px-1 font-mono text-[9px] font-bold leading-[14px] text-white',
+                      isB ? 'bg-primary' : 'bg-default-500',
+                    ].join(' ')}
+                  >
+                    {isB ? 'B' : 'A'}
+                  </span>
+                )}
+                <span className="truncate text-[10.5px] font-bold">
+                  {t('from_to.timeline.version_n', { number: index + 1 })}
                 </span>
-              )}
-              <span className="block truncate text-[10.5px] font-bold">
-                {t('from_to.timeline.version_n', { number: index + 1 })}
               </span>
               <span className="block truncate font-mono text-[9.5px] text-default-400">
                 {dayjs.utc(version.validity.start).format('MM-DD HH:mm')}Z
@@ -149,7 +148,7 @@ export default function VersionTimeline({
                 })}
                 {open ? ` · ${t('from_to.timeline.open')}` : ''}
               </span>
-            </button>
+            </div>
           )
         })}
       </div>
