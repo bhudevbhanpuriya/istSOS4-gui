@@ -42,6 +42,20 @@ const LANE_HEIGHT = 14
 const LANE_GAP = 4
 
 /**
+ * Class index that marks a strip's label item rather than a run of readings.
+ *
+ * The label rides in the same custom series as the rects, as one extra data
+ * item per tagged lane, so it is placed by the same coordinate system and
+ * moves with the strip when the lane grid is re-pinned. The item spans the
+ * lane's whole data extent so that `weakFilter` keeps it through any zoom that
+ * keeps any part of the strip.
+ */
+const LANE_TAG_ITEM = -1
+
+/** Pixels between a strip's label and its left edge. */
+const LANE_TAG_GAP = 6
+
+/**
  * Distance from the container bottom to the plot's lower edge in the laneless
  * chart — the band the rotated date labels and the toolbox live in. The lane
  * block is inserted above it, and the plot gives up exactly that much height.
@@ -432,14 +446,23 @@ export function buildObservationGraphOption({
           silent: true,
           animation: false,
           // [ startX, endX, laneIndex, classIndex ]
-          data: qualityLanes.flatMap((lane, laneIndex) =>
-            lane.segments.map((segment) => [
+          data: qualityLanes.flatMap((lane, laneIndex) => {
+            const runs = lane.segments.map((segment) => [
               segment.startX,
               segment.endX,
               laneIndex,
               QUALITY_CLASSES.indexOf(segment.qualityClass),
             ])
-          ),
+            // The "A"/"B" beside the strip when comparing. Absent in live
+            // mode, where there is one strip and the legend below names it.
+            if (!lane.tag || lane.segments.length === 0) return runs
+            const first = lane.segments[0]
+            const last = lane.segments[lane.segments.length - 1]
+            return [
+              ...runs,
+              [first.startX, last.endX, laneIndex, LANE_TAG_ITEM],
+            ]
+          }),
           encode: { x: [0, 1], y: 2 },
           renderItem: (
             params: echarts.CustomSeriesRenderItemParams,
@@ -447,6 +470,41 @@ export function buildObservationGraphOption({
           ) => {
             const laneIndex = Number(api.value(2))
             const classIndex = Number(api.value(3))
+            const coordSys = params.coordSys as unknown as {
+              x: number
+              y: number
+              width: number
+              height: number
+            }
+            if (classIndex === LANE_TAG_ITEM) {
+              const lane = qualityLanes[laneIndex]
+              // In the gutter left of the strip, on the lane's centre line, in
+              // the colour of the series it describes — so the strip and the
+              // line above it pair by colour as well as by letter.
+              const centreY = api.coord([
+                api.value(0),
+                laneCount - laneIndex - 0.5,
+              ])[1]
+              const isPrimaryLane = lane?.id === primarySeries?.id
+              const isSecondaryLane = lane?.id === secondarySeries?.id
+              return {
+                type: 'text',
+                style: {
+                  text: lane?.tag ?? '',
+                  x: coordSys.x - LANE_TAG_GAP,
+                  y: centreY,
+                  align: 'right',
+                  verticalAlign: 'middle',
+                  fontSize: 10,
+                  fontWeight: 'bold',
+                  fill: isPrimaryLane
+                    ? primaryColor
+                    : isSecondaryLane
+                      ? secondaryColor
+                      : '#94a3b8',
+                },
+              }
+            }
             // Lane 0 sits at the top, so it takes the highest band on an axis
             // that runs 0..laneCount. The 0.08 inset leaves a hairline between
             // two stacked strips without needing a separate spacer.
@@ -467,12 +525,7 @@ export function buildObservationGraphOption({
                 width: Math.max(bottomRight[0] - topLeft[0], 1),
                 height: bottomRight[1] - topLeft[1],
               },
-              params.coordSys as unknown as {
-                x: number
-                y: number
-                width: number
-                height: number
-              }
+              coordSys
             )
             if (!clipped) return undefined
             return {
