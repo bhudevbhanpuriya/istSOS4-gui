@@ -3,9 +3,12 @@ import utc from 'dayjs/plugin/utc'
 import { Datastream, Observation, RecordCommit } from '@/types/domain'
 
 import {
-  classifyQuality,
+  ISTSOS_QUALITY_SCHEME,
+  matchQuality,
   parseResultQuality,
   type QualityClass,
+  type QualityRuleRef,
+  type QualityScheme,
 } from './resultQuality'
 
 dayjs.extend(utc)
@@ -30,6 +33,8 @@ export type GraphRow = {
    */
   quality: number | null
   qualityClass: QualityClass
+  /** The rule of the series' scheme that decided `qualityClass`. */
+  qualityRule: QualityRuleRef
 }
 
 export type GraphSeriesEntry = {
@@ -38,6 +43,8 @@ export type GraphSeriesEntry = {
   unit: string
   observedProperty: string
   rows: GraphRow[]
+  /** How this series' quality values are read — see `qualitySchemeStore`. */
+  qualityScheme: QualityScheme
   /**
    * ISO-8601 snapshot this series was read at — set only in As-Of *compare*
    * mode, where two series share one datastream and differ only by `$as_of`.
@@ -245,7 +252,10 @@ export function withAlpha(color: string, alpha: number) {
   return color
 }
 
-export function buildRows(observations: Observation[]): GraphRow[] {
+export function buildRows(
+  observations: Observation[],
+  scheme: QualityScheme = ISTSOS_QUALITY_SCHEME
+): GraphRow[] {
   const rows: GraphRow[] = []
   for (const obs of Array.isArray(observations) ? observations : []) {
     const ts = extractTimestamp(obs)
@@ -258,12 +268,14 @@ export function buildRows(observations: Observation[]): GraphRow[] {
     // the API's default $select for Observation and ObservationTravelTime alike,
     // so a snapshot returns the quality in effect at that instant for free.
     const quality = parseResultQuality(obs?.resultQuality)
+    const match = matchQuality(quality, scheme)
     rows.push({
       ts,
       value,
       commit: commit && commit['@iot.id'] != null ? commit : null,
       quality,
-      qualityClass: classifyQuality(quality),
+      qualityClass: match.qualityClass,
+      qualityRule: match.rule,
     })
   }
   rows.sort((a, b) => a.ts - b.ts)
@@ -276,12 +288,18 @@ export function buildSeriesEntries({
   comparisonDatastream,
   chartData,
   comparisonChartData,
+  schemeFor = () => ISTSOS_QUALITY_SCHEME,
 }: {
   allSeries: SeriesSource[]
   datastream: Datastream | null
   comparisonDatastream: Datastream | null
   chartData: GraphRow[]
   comparisonChartData: GraphRow[]
+  /**
+   * The scheme each datastream's quality is read under. `chartData` and
+   * `comparisonChartData` must already have been built with the same one.
+   */
+  schemeFor?: (datastream: Datastream | null) => QualityScheme
 }): GraphSeriesEntry[] {
   if (Array.isArray(allSeries) && allSeries.length > 0) {
     return allSeries.map((entry) => {
@@ -298,12 +316,14 @@ export function buildSeriesEntries({
       // The aligned axis pins each series' right edge to its own window end,
       // which is `asOf` unless that snapshot fell back to older data.
       const anchorIso = entry?.anchorIso ?? asOf
+      const qualityScheme = schemeFor(ds ?? null)
       return {
         id: makeSeriesId(dsId, asOf),
         name: dsName,
         unit: dsUnit,
         observedProperty: dsObservedProperty,
-        rows: buildRows(entry?.observations),
+        rows: buildRows(entry?.observations, qualityScheme),
+        qualityScheme,
         asOf,
         anchorTs: anchorIso ? dayjs.utc(anchorIso).valueOf() : null,
         endpoint: ds?.__sourceEndpoint ?? null,
@@ -318,6 +338,7 @@ export function buildSeriesEntries({
       unit: String(datastream?.unitOfMeasurement?.symbol ?? ''),
       observedProperty: String(datastream?.ObservedProperty?.name ?? ''),
       rows: chartData,
+      qualityScheme: schemeFor(datastream),
       endpoint: datastream?.__sourceEndpoint ?? null,
     },
     ...(comparisonDatastream
@@ -334,6 +355,7 @@ export function buildSeriesEntries({
               comparisonDatastream?.ObservedProperty?.name ?? ''
             ),
             rows: comparisonChartData,
+            qualityScheme: schemeFor(comparisonDatastream),
             endpoint: comparisonDatastream?.__sourceEndpoint ?? null,
           },
         ]

@@ -28,9 +28,12 @@ import {
   type SnapshotMarker,
 } from '../lib/observationGraphOptions'
 import {
+  ISTSOS_QUALITY_SCHEME,
   buildQualitySegments,
+  sameQualityScheme,
   tallyQuality,
 } from '../lib/resultQuality'
+import { useQualitySchemeResolver } from '../lib/useQualitySchemes'
 import QualityLegend, { type QualityLegendLane } from './QualityLegend'
 import ReadingDetailsRail, {
   type ReadingDetails,
@@ -100,6 +103,8 @@ type ObservationGraphProps = {
   /** ISO-8601 snapshot a single As-Of chart was read at; null for live data.
    *  Compare mode reads each series' own snapshot instead. */
   asOfDate?: string | null
+  /** Opens the quality rules editor from the legend. No button when absent. */
+  onCustomizeQuality?: () => void
 }
 
 export default function ObservationGraph({
@@ -123,8 +128,13 @@ export default function ObservationGraph({
   isCompare = false,
   changeRegions = [],
   asOfDate = null,
+  onCustomizeQuality,
 }: ObservationGraphProps) {
   const { t } = useTranslation()
+  // Each datastream's quality is read under the viewer's rules for it, and the
+  // resolver changes identity when those are saved — so every memo below that
+  // lists it re-classifies the rows on screen.
+  const resolveScheme = useQualitySchemeResolver()
 
   const containerRef = useRef<HTMLDivElement | null>(null)
   const chartRef = useRef<echarts.EChartsType | null>(null)
@@ -158,12 +168,15 @@ export default function ObservationGraph({
   }, [])
 
   const chartData = useMemo(() => {
-    return buildRows(observations)
-  }, [observations])
+    return buildRows(observations, resolveScheme(datastream).scheme)
+  }, [observations, datastream, resolveScheme])
 
   const comparisonChartData = useMemo(() => {
-    return buildRows(comparisonObservations)
-  }, [comparisonObservations])
+    return buildRows(
+      comparisonObservations,
+      resolveScheme(comparisonDatastream).scheme
+    )
+  }, [comparisonObservations, comparisonDatastream, resolveScheme])
 
   const seriesEntries = useMemo(() => {
     return buildSeriesEntries({
@@ -172,6 +185,7 @@ export default function ObservationGraph({
       comparisonDatastream,
       chartData,
       comparisonChartData,
+      schemeFor: (ds) => resolveScheme(ds).scheme,
     })
   }, [
     allSeries,
@@ -179,6 +193,7 @@ export default function ObservationGraph({
     comparisonDatastream,
     chartData,
     comparisonChartData,
+    resolveScheme,
   ])
 
   /**
@@ -196,7 +211,7 @@ export default function ObservationGraph({
    * the snapshot it was read at. Hiding it instead left a reader unable to tell
    * "no quality recorded" from "this chart has no quality feature".
    */
-  const { qualityLanes, qualityLegendLanes } = useMemo(() => {
+  const { qualityLanes, qualityLegendLanes, qualityCustomized } = useMemo(() => {
     const { primarySeries, secondarySeries } = resolvePrimaryAndSecondarySeries(
       seriesEntries,
       activeDatastreamIds
@@ -240,9 +255,13 @@ export default function ObservationGraph({
 
     const lanes: QualityLane[] = []
     const legend: QualityLegendLane[] = []
+    let customized = false
 
     for (const { entry, tag, label, asOf } of sources) {
       if (!entry || entry.rows.length === 0) continue
+      if (!sameQualityScheme(entry.qualityScheme, ISTSOS_QUALITY_SCHEME)) {
+        customized = true
+      }
       const tally = tallyQuality(entry.rows)
       lanes.push({
         id: entry.id,
@@ -254,10 +273,14 @@ export default function ObservationGraph({
           }))
         ),
       })
-      legend.push({ tag, label, tally, asOf })
+      legend.push({ tag, label, tally, asOf, scheme: entry.qualityScheme })
     }
 
-    return { qualityLanes: lanes, qualityLegendLanes: legend }
+    return {
+      qualityLanes: lanes,
+      qualityLegendLanes: legend,
+      qualityCustomized: customized,
+    }
   }, [seriesEntries, activeDatastreamIds, isCompare, alignedAxis, asOfDate, t])
 
   /**
@@ -337,6 +360,12 @@ export default function ObservationGraph({
           endpoint: entry.endpoint ?? null,
           qualityClass: nearest.qualityClass,
           quality: nearest.quality,
+          qualityScheme: entry.qualityScheme,
+          qualityRule: nearest.qualityRule,
+          qualityCustom: !sameQualityScheme(
+            entry.qualityScheme,
+            ISTSOS_QUALITY_SCHEME
+          ),
         })
       }
       if (entries.length === 0) return
@@ -606,7 +635,11 @@ export default function ObservationGraph({
       <div className="flex min-w-0 flex-1 flex-col">
         <div ref={containerRef} className="min-h-0 flex-1" />
         {qualityLegendLanes.length > 0 && (
-          <QualityLegend lanes={qualityLegendLanes} />
+          <QualityLegend
+            lanes={qualityLegendLanes}
+            onCustomize={onCustomizeQuality}
+            customized={qualityCustomized}
+          />
         )}
       </div>
       {selected && (

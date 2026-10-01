@@ -37,8 +37,11 @@ import type { RecordCommit } from '@/types/domain'
 
 import {
   QUALITY_COLORS,
-  QUALITY_LABEL_KEYS,
+  describeRuleCondition,
+  qualityLabel,
   type QualityClass,
+  type QualityRuleRef,
+  type QualityScheme,
 } from '../lib/resultQuality'
 
 dayjs.extend(utc)
@@ -60,6 +63,14 @@ export type ReadingDetailsEntry = {
   qualityClass: QualityClass
   /** The raw index behind it — null when the reading carries none. */
   quality: number | null
+  /** The scheme the verdict was reached under, and the rule of it that did. */
+  qualityScheme: QualityScheme
+  qualityRule: QualityRuleRef
+  /**
+   * True when the scheme is the viewer's own. Only then is the rule worth a
+   * line: under the default, every reading would repeat the same convention.
+   */
+  qualityCustom: boolean
 }
 
 export type ReadingDetails = {
@@ -173,11 +184,21 @@ export default function ReadingDetailsRail({
                         backgroundColor: QUALITY_COLORS[entry.qualityClass],
                       }}
                     />
-                    {t(QUALITY_LABEL_KEYS[entry.qualityClass])}
+                    {qualityLabel(entry.qualityClass, entry.qualityScheme, t)}
                     {entry.quality !== null && (
                       <span className="opacity-60">{entry.quality}</span>
                     )}
                   </span>
+                </Row>
+              )}
+              {entry.qualityClass !== 'none' && entry.qualityCustom && (
+                <Row label={t('quality.rule')}>
+                  {typeof entry.qualityRule === 'number' &&
+                  entry.qualityScheme.rules[entry.qualityRule]
+                    ? `#${entry.qualityRule + 1} · ${describeRuleCondition(
+                        entry.qualityScheme.rules[entry.qualityRule]
+                      )}`
+                    : t('quality.rule_fallback')}
                 </Row>
               )}
 

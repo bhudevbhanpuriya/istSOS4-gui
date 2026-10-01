@@ -1,6 +1,12 @@
 import dayjs from 'dayjs'
 import utc from 'dayjs/plugin/utc'
 import * as XLSX from 'xlsx'
+import { resolveQualityScheme } from '@/features/observations/lib/qualitySchemeStore'
+import {
+  ISTSOS_QUALITY_SCHEME,
+  qualityClassOf,
+  sameQualityScheme,
+} from '@/features/observations/lib/resultQuality'
 import { Datastream, Observation, Thing } from '@/types/domain'
 
 dayjs.extend(utc)
@@ -78,6 +84,12 @@ export async function buildDatastreamWorkbookPayload({
         sourceEndpoint
       )
 
+      // The viewer's own reading of the column, alongside the column itself —
+      // but only when it is their own: under the default, a verdict column
+      // would restate the istSOS convention for every row.
+      const { scheme } = resolveQualityScheme(ds)
+      const withVerdict = !sameQualityScheme(scheme, ISTSOS_QUALITY_SCHEME)
+
       const rows = (Array.isArray(result.data) ? result.data : [])
         .slice()
         .sort((a: Observation, b: Observation) => {
@@ -98,9 +110,17 @@ export async function buildDatastreamWorkbookPayload({
           // flattened to a number, which would silently discard everything the
           // number is not.
           resultQuality: formatQualityForExport(obs?.resultQuality),
+          ...(withVerdict
+            ? { qualityVerdict: qualityClassOf(obs?.resultQuality, scheme) }
+            : {}),
         }))
       const sheet = XLSX.utils.json_to_sheet(rows, {
-        header: ['phenomenonTime', 'result', 'resultQuality'],
+        header: [
+          'phenomenonTime',
+          'result',
+          'resultQuality',
+          ...(withVerdict ? ['qualityVerdict'] : []),
+        ],
       })
       const sheetName = sanitizeSheetName(streamName, `Datastream_${index + 1}`)
       XLSX.utils.book_append_sheet(workbook, sheet, sheetName)
