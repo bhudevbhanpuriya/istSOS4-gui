@@ -74,6 +74,12 @@ export type MapSnapshot = {
    * instead of passing live positions off as historical ones.
    */
   failedEndpoints: string[]
+  /**
+   * Data sources whose snapshot was read, but without the latest readings —
+   * that read is best effort and can run out of time on a large Observation
+   * history. Their markers are at the right place, with no value on them.
+   */
+  readingsUnavailableEndpoints: string[]
 }
 
 // ---------------------------------------------------------------------------
@@ -307,6 +313,7 @@ const mockAdapter: AsOfAdapter = {
     return {
       things: resolved.filter((thing): thing is NonNullable<typeof thing> => !!thing),
       failedEndpoints: [],
+      readingsUnavailableEndpoints: [],
     }
   },
 }
@@ -567,7 +574,11 @@ const apiAdapter: AsOfAdapter = {
       ok: boolean
       error?: string
       things?: Thing[]
-      sources?: Array<{ endpoint: string; error: string | null }>
+      sources?: Array<{
+        endpoint: string
+        error: string | null
+        readingsUnavailable?: boolean
+      }>
     }>(asOfThingsApiPath, {
       asOfDate,
       tokens: getAllDataSourceTokens(),
@@ -590,9 +601,14 @@ const apiAdapter: AsOfAdapter = {
       )
       .map((thing) => ({ ...thing, __asOfLocationSource: 'live' as const }))
 
+    const readingsUnavailableEndpoints = (payload.sources ?? [])
+      .filter((source) => !source.error && !!source.readingsUnavailable)
+      .map((source) => source.endpoint.replace(/\/+$/, ''))
+
     return {
       things: [...(payload.things ?? []), ...fallback],
       failedEndpoints,
+      readingsUnavailableEndpoints,
     }
   },
 }

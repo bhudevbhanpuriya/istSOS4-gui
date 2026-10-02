@@ -26,12 +26,15 @@ export default function AsOfMapStatus({
   isLoading,
   error,
   failedSourceCount,
+  readingsUnavailableCount = 0,
   approximateCount,
   lostCount,
 }: {
   isLoading: boolean
   error: string | null
   failedSourceCount: number
+  /** Sources drawn at their snapshot positions but without latest readings. */
+  readingsUnavailableCount?: number
   approximateCount: number
   lostCount: number
 }) {
@@ -47,6 +50,15 @@ export default function AsOfMapStatus({
     lines.push({
       key: 'failed',
       text: t('as_of.map.failed_sources', { count: failedSourceCount }),
+      tone: 'warn',
+    })
+  }
+  if (!error && readingsUnavailableCount > 0) {
+    lines.push({
+      key: 'readings',
+      text: t('as_of.map.readings_unavailable', {
+        count: readingsUnavailableCount,
+      }),
       tone: 'warn',
     })
   }
