@@ -417,6 +417,8 @@
       "error": "Impossibile caricare la mappa a questa data — i marker mostrano le posizioni attuali.",
       "failed_sources_one": "{{count}} sorgente dati non è stata caricata a questa data — i suoi marker mostrano le posizioni attuali.",
       "failed_sources_other": "{{count}} sorgenti dati non sono state caricate a questa data — i loro marker mostrano le posizioni attuali.",
+      "readings_unavailable_one": "Le ultime letture di {{count}} sorgente dati hanno richiesto troppo tempo — i suoi marker mostrano le posizioni a questa data, senza valori.",
+      "readings_unavailable_other": "Le ultime letture di {{count}} sorgenti dati hanno richiesto troppo tempo — i loro marker mostrano le posizioni a questa data, senza valori.",
       "approximate_one": "{{count}} Thing non ha uno storico delle posizioni — il suo marker è sulla Location attuale.",
       "approximate_other": "{{count}} Thing non hanno uno storico delle posizioni — i loro marker sono sulla Location attuale.",
       "lost_one": "{{count}} Thing esisteva a questa data ma è stato eliminato, e la sua posizione non è stata conservata — non ha marker.",

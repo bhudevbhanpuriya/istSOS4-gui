@@ -37,6 +37,8 @@ export type AsOfMapThingsResult = {
   error: string | null
   /** Data sources shown live because their snapshot could not be read. */
   failedEndpoints: string[]
+  /** Data sources drawn as of the instant, but without their latest readings. */
+  readingsUnavailableEndpoints: string[]
   /** Things drawn at a position that is not known to be historical. */
   approximateCount: number
   /** Things that existed at the instant but cannot be drawn: place not recorded. */
@@ -47,6 +49,7 @@ type Resolution = {
   asOf: string
   things: Thing[]
   failedEndpoints: string[]
+  readingsUnavailableEndpoints: string[]
   error: string | null
 }
 
@@ -93,6 +96,7 @@ export function useAsOfMapThings({
             asOf: asOfDate,
             things: snapshot.things,
             failedEndpoints: snapshot.failedEndpoints,
+            readingsUnavailableEndpoints: snapshot.readingsUnavailableEndpoints,
             error: null,
           })
         })
@@ -108,6 +112,7 @@ export function useAsOfMapThings({
               __asOfLocationSource: 'live' as const,
             })),
             failedEndpoints: [],
+            readingsUnavailableEndpoints: [],
             error: err instanceof Error ? err.message : String(err),
           })
         })
@@ -148,6 +153,7 @@ export function useAsOfMapThings({
       isLoading: false,
       error: null,
       failedEndpoints: [],
+      readingsUnavailableEndpoints: [],
       approximateCount: 0,
       lostCount: 0,
     }
@@ -159,6 +165,7 @@ export function useAsOfMapThings({
     isLoading: isLoading || resolution?.asOf !== asOfDate,
     error: resolution?.error ?? null,
     failedEndpoints: resolution?.failedEndpoints ?? [],
+    readingsUnavailableEndpoints: resolution?.readingsUnavailableEndpoints ?? [],
     approximateCount,
     lostCount,
   }

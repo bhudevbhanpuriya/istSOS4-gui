@@ -106,7 +106,8 @@ function idOf(row: unknown): string {
  */
 export async function readAll(
   url: string,
-  headers: Record<string, string>
+  headers: Record<string, string>,
+  signal?: AbortSignal
 ): Promise<Row[]> {
   const rows: Row[] = []
   const joiner = url.includes('?') ? '&' : '?'
@@ -114,7 +115,7 @@ export async function readAll(
   for (let page = 0; page < MAX_PAGES; page += 1) {
     const response = await fetch(
       `${url}${joiner}$top=${PAGE_SIZE}&$skip=${rows.length}`,
-      { headers, cache: 'no-store' }
+      { headers, cache: 'no-store', signal }
     )
     if (!response.ok) {
       throw new SnapshotReadError(
@@ -132,12 +133,30 @@ export async function readAll(
 }
 
 /** The expand for a snapshot Datastream — the same fields the live map reads. */
-const DATASTREAM_EXPAND = [
-  'Network',
-  'Sensor',
-  'ObservedProperty',
-  'Observations($top=1;$orderby=phenomenonTime desc)',
-].join(',')
+const DATASTREAM_EXPAND = ['Network', 'Sensor', 'ObservedProperty'].join(',')
+
+/**
+ * Each Datastream's latest reading at the instant, read on its own.
+ *
+ * It used to ride in `DATASTREAM_EXPAND`, which made the whole snapshot only as
+ * fast as its slowest part. On a deployment with a large Observation history
+ * this expand under `$as_of` is by far the slowest read there is: on
+ * hydromet.supsi.ch (248 Datastreams) it ran into the gateway's timeout and
+ * answered 504 after ~50 s, where the same expand on live data took 7 s and the
+ * metadata 2 s. The 504 failed the snapshot, and the source fell back to live
+ * Things — so a Thing whose Location had since been corrected was drawn where
+ * it is now, under a snapshot label.
+ *
+ * A latest reading only decorates a marker, so it must not be able to cost the
+ * marker its position. It is read alongside the rest, within
+ * `READINGS_BUDGET_MS`; when that read fails or runs over, the Datastreams
+ * carry no reading at all and the snapshot says so. Live readings are never
+ * substituted: they would show today's value under a past date.
+ */
+const LATEST_READING_EXPAND = 'Observations($top=1;$orderby=phenomenonTime desc)'
+
+/** How long the latest readings may take before the snapshot goes without. */
+const READINGS_BUDGET_MS = 8_000
 
 const HISTORICAL_LOCATION_SELECT = '$select=id,time&$expand=Locations'
 
@@ -199,11 +218,17 @@ export type ThingsAsOf = {
   /** The instant actually queried, after clamping. */
   asOf: string
   things: Row[]
+  /**
+   * False when the latest readings could not be read in time: the Datastreams
+   * then carry no `Observations`, and everything else is still exact.
+   */
+  readingsAvailable: boolean
 }
 
 /**
  * Every Thing that existed at `asOfDate` — or just `thingId` — with its
  * Datastreams, latest readings and Locations as they were at that instant.
+ * The readings are best effort — see `LATEST_READING_EXPAND`.
  *
  * Returns null when a single `thingId` did not exist at the instant (the API
  * answers 404). Throws `SnapshotReadError` when the Things or Datastreams
@@ -248,19 +273,29 @@ export async function readThingsAsOf(
   // `$filter=Thing/id eq …` answers 404 under `$as_of`, but the navigation
   // path works — and with a single parent version at one instant it does not
   // repeat rows the way it does under `$from_to`.
-  const datastreams = await readAll(
-    single
-      ? `${endpoint}${single}/Datastreams?${asOfParam}&$expand=${DATASTREAM_EXPAND}`
-      : `${endpoint}/Datastreams?${asOfParam}&$expand=Thing($select=id),${DATASTREAM_EXPAND}`,
-    headers
-  )
+  const datastreamsPath = single
+    ? `${endpoint}${single}/Datastreams?${asOfParam}`
+    : `${endpoint}/Datastreams?${asOfParam}`
 
-  // Location history is what places a Thing, but a backend that cannot serve
-  // it should still produce a snapshot: every Thing then falls back to its
-  // current link and is flagged approximate, rather than the map going blank.
-  // Both reads fail towards 'link' — the flagged answer — never towards
-  // 'unplaced', which would hide a Thing that was really there.
-  const [history, everPlaced] = await Promise.all([
+  // All four reads at once: the readings may use their whole budget, and
+  // nothing else should wait behind them.
+  const [datastreams, readings, history, everPlaced] = await Promise.all([
+    readAll(
+      single
+        ? `${datastreamsPath}&$expand=${DATASTREAM_EXPAND}`
+        : `${datastreamsPath}&$expand=Thing($select=id),${DATASTREAM_EXPAND}`,
+      headers
+    ),
+    readAll(
+      `${datastreamsPath}&$select=id&$expand=${LATEST_READING_EXPAND}`,
+      headers,
+      AbortSignal.timeout(READINGS_BUDGET_MS)
+    ).catch(() => null),
+    // Location history is what places a Thing, but a backend that cannot serve
+    // it should still produce a snapshot: every Thing then falls back to its
+    // current link and is flagged approximate, rather than the map going blank.
+    // Both reads fail towards 'link' — the flagged answer — never towards
+    // 'unplaced', which would hide a Thing that was really there.
     readAll(
       single
         ? `${endpoint}${single}/HistoricalLocations?${asOfParam}&${HISTORICAL_LOCATION_SELECT}`
@@ -282,6 +317,11 @@ export async function readThingsAsOf(
     ).catch(() => new Set<string>()),
   ])
 
+  const readingsByDatastream = new Map<string, unknown>()
+  for (const row of readings ?? []) {
+    readingsByDatastream.set(idOf(row), row?.Observations ?? [])
+  }
+
   const datastreamsByThing = new Map<string, Row[]>()
   for (const datastream of datastreams) {
     const owner = single ? thingId! : idOf(datastream?.Thing)
@@ -289,6 +329,9 @@ export async function readThingsAsOf(
     // The owner was only expanded to group by; the live shape has no `Thing`.
     const rest = { ...datastream }
     delete rest.Thing
+    // Without readings the key is left off rather than set to [], which would
+    // claim the Datastream had no reading at the instant.
+    if (readings) rest.Observations = readingsByDatastream.get(idOf(datastream)) ?? []
     const list = datastreamsByThing.get(owner) ?? []
     list.push(rest)
     datastreamsByThing.set(owner, list)
@@ -312,5 +355,6 @@ export async function readThingsAsOf(
         : placeThing(thing, undefined, false)
       return { ...placed, Datastreams: datastreamsByThing.get(id) ?? [] }
     }),
+    readingsAvailable: readings !== null,
   }
 }
