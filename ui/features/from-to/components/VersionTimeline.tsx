@@ -48,6 +48,12 @@ const ACTION_STRIPE: Record<string, string> = {
   DELETE: 'border-t-danger',
 }
 
+/**
+ * Past this many versions the 4px gaps between bands start to cost more width
+ * than the bands themselves, so they close to a hairline.
+ */
+const DENSE_VERSION_COUNT = 20
+
 function stripeFor(actionType?: string): string {
   return ACTION_STRIPE[actionType ?? ''] ?? 'border-t-default-300'
 }
@@ -88,11 +94,17 @@ export default function VersionTimeline({
         </span>
       </div>
 
-      {/* Bands cannot shrink below their own padding, so past a few dozen
-          versions a row of them is wider than the column no matter what
-          percentage each is given. Scrolling the track keeps every band
-          reachable and stops the page itself scrolling sideways. */}
-      <div className="flex items-stretch gap-1 overflow-x-auto pb-1">
+      {/* The row is always exactly the column's width, never scrolled. Each
+          band grows by its share from a zero basis, so the gaps come out of
+          the row before the shares are applied and the bands sum to 100% of
+          what is left. A band can shrink to its border, so even a full page of
+          a hundred versions fits once the gaps drop to a pixel. */}
+      <div
+        className={[
+          'flex items-stretch',
+          versions.length > DENSE_VERSION_COUNT ? 'gap-px' : 'gap-1',
+        ].join(' ')}
+      >
         {versions.map((version, index) => {
           const isA = index === indexA
           const isB = index === indexB
@@ -101,16 +113,15 @@ export default function VersionTimeline({
           return (
             <div
               key={versionKey(version)}
-              // A floor in pixels as well as percent: at a hundred versions the
-              // percentage alone rounds to less than the band's own padding,
-              // and the band's label would no longer fit.
-              style={{ width: `${widths[index]}%`, minWidth: 34, flex: '0 0 auto' }}
+              style={{ flex: `${widths[index]} 1 0%` }}
+              // The full label stays one hover away on a band too narrow to
+              // print it.
               title={t('from_to.timeline.band_label', {
                 number: index + 1,
                 start: version.validity.start,
               })}
               className={[
-                'min-w-0 rounded-lg border border-t-[3px] px-2 pb-2 pt-1.5 text-left',
+                '@container min-w-0 overflow-hidden rounded-lg border border-t-[3px] text-left',
                 stripeFor(version.commit?.actionType),
                 isB
                   ? 'border-primary bg-primary/10 ring-1 ring-primary'
@@ -119,35 +130,40 @@ export default function VersionTimeline({
                     : 'border-default-200',
               ].join(' ')}
             >
-              {/* The side chip sits inline beside the title: hung above the
-                  band it was clipped by the scrolling track. It comes first
-                  so a narrow band truncates the title, never the chip. */}
-              <span className="flex min-w-0 items-center gap-1">
-                {(isA || isB) && (
-                  <span
-                    className={[
-                      'shrink-0 rounded px-1 font-mono text-[9px] font-bold leading-[14px] text-white',
-                      isB ? 'bg-primary' : 'bg-default-500',
-                    ].join(' ')}
-                  >
-                    {isB ? 'B' : 'A'}
+              {/* Padding lives here rather than on the band, so a narrow band
+                  can drop it. Below the width a label needs, the text goes
+                  invisible rather than hidden: the band keeps its height, and
+                  a row of narrow bands stays as tall as a row of wide ones. */}
+              <div className="px-2 pb-2 pt-1.5 @max-[48px]:px-0.5">
+                {/* The side chip sits inline beside the title and comes first, so
+                    a narrow band truncates the title, never the chip. */}
+                <span className="flex min-w-0 items-center gap-1">
+                  {(isA || isB) && (
+                    <span
+                      className={[
+                        'shrink-0 rounded px-1 font-mono text-[9px] font-bold leading-[14px] text-white',
+                        isB ? 'bg-primary' : 'bg-default-500',
+                      ].join(' ')}
+                    >
+                      {isB ? 'B' : 'A'}
+                    </span>
+                  )}
+                  <span className="truncate text-[10.5px] font-bold @max-[48px]:invisible">
+                    {t('from_to.timeline.version_n', { number: index + 1 })}
                   </span>
-                )}
-                <span className="truncate text-[10.5px] font-bold">
-                  {t('from_to.timeline.version_n', { number: index + 1 })}
                 </span>
-              </span>
-              <span className="block truncate font-mono text-[9.5px] text-default-400">
-                {dayjs.utc(version.validity.start).format('MM-DD HH:mm')}Z
-              </span>
-              <span className="block truncate text-[9.5px] text-default-400">
-                {t('from_to.timeline.held', {
-                  duration: formatDuration(
-                    validityDurationMs(version.validity, windowEnd),
-                  ),
-                })}
-                {open ? ` · ${t('from_to.timeline.open')}` : ''}
-              </span>
+                <span className="block truncate font-mono text-[9.5px] text-default-400 @max-[48px]:invisible">
+                  {dayjs.utc(version.validity.start).format('MM-DD HH:mm')}Z
+                </span>
+                <span className="block truncate text-[9.5px] text-default-400 @max-[48px]:invisible">
+                  {t('from_to.timeline.held', {
+                    duration: formatDuration(
+                      validityDurationMs(version.validity, windowEnd),
+                    ),
+                  })}
+                  {open ? ` · ${t('from_to.timeline.open')}` : ''}
+                </span>
+              </div>
             </div>
           )
         })}
