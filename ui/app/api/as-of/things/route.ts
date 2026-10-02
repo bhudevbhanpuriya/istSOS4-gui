@@ -85,12 +85,18 @@ export async function POST(request: Request) {
             (datastream: Record<string, unknown>) => ({ ...datastream, ...meta })
           ),
         }))
-        return { endpoint, things, error: null as string | null }
+        return {
+          endpoint,
+          things,
+          error: null as string | null,
+          readingsUnavailable: snapshot ? !snapshot.readingsAvailable : false,
+        }
       } catch (error) {
         return {
           endpoint,
           things: [],
           error: error instanceof Error ? error.message : String(error),
+          readingsUnavailable: false,
         }
       }
     })
@@ -100,10 +106,11 @@ export async function POST(request: Request) {
     ok: true,
     asOf: clampAsOf(asOfDate),
     things: results.flatMap((result) => result.things),
-    sources: results.map(({ endpoint, things, error }) => ({
+    sources: results.map(({ endpoint, things, error, readingsUnavailable }) => ({
       endpoint,
       count: things.length,
       error,
+      readingsUnavailable,
     })),
   })
 }

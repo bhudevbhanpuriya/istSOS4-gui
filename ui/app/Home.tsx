@@ -133,6 +133,7 @@ export default function Home({
     isLoading: mapSnapshotLoading,
     error: mapSnapshotError,
     failedEndpoints: mapSnapshotFailedEndpoints,
+    readingsUnavailableEndpoints: mapSnapshotReadingsUnavailable,
     approximateCount: mapApproximateCount,
     lostCount: mapLostCount,
   } = useAsOfMapThings({ liveThings: localThings, asOfDate })
@@ -259,6 +260,7 @@ export default function Home({
           isLoading={mapSnapshotLoading}
           error={mapSnapshotError}
           failedSourceCount={mapSnapshotFailedEndpoints.length}
+          readingsUnavailableCount={mapSnapshotReadingsUnavailable.length}
           approximateCount={mapApproximateCount}
           lostCount={mapLostCount}
         />
