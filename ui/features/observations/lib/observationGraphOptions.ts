@@ -50,6 +50,15 @@ export type QualityLane = {
 /** Series id of the strip itself, so the legend and tooltip can exclude it. */
 const QUALITY_SERIES_ID = '__quality_lane__'
 
+/** Series id of the strip's invisible snap targets — see `buildLaneSnapSeries`. */
+const QUALITY_SNAP_SERIES_ID = '__quality_lane_snap__'
+
+/** True for the series that exist only to draw or steer the strips. */
+function isLaneSeries(seriesName: unknown) {
+  const name = String(seriesName ?? '')
+  return name === QUALITY_SERIES_ID || name === QUALITY_SNAP_SERIES_ID
+}
+
 /** Height of one strip, and the gap between two of them. */
 const LANE_HEIGHT = 14
 const LANE_GAP = 4
@@ -285,6 +294,11 @@ export function buildQualityLaneSeries(
     ...axes,
     silent: true,
     animation: false,
+    // Out of the axis tooltip as well. Left in, its runs are what the crosshair
+    // snaps to while the cursor is over the strips, so the chip there named the
+    // reading at the nearest run boundary — hours or days from the cursor on a
+    // long uniform run. `buildLaneSnapSeries` gives that axis readings instead.
+    tooltip: { show: false },
     // [ startX, endX, laneIndex, classIndex ]
     data: qualityLanes.flatMap((lane, laneIndex) => {
       const runs = lane.segments.map((segment) => [
@@ -363,6 +377,42 @@ export function buildQualityLaneSeries(
         },
       }
     },
+  }
+}
+
+/**
+ * Invisible points on the lane grid, one per plotted reading, for the crosshair
+ * to snap to while the cursor is over the strips.
+ *
+ * The axis under the cursor snaps to the nearest data item of its own series,
+ * and the linked axis follows that value unsnapped. Over the plot that is a
+ * reading, which the strip's axis then follows. Over the strips it would be
+ * nothing — the line would sit at the raw cursor position and the chip's header
+ * name an instant no reading has. With these points both grids snap alike, so
+ * the chip reads the same wherever along the line the cursor is.
+ */
+export function buildLaneSnapSeries(
+  plottedXs: Iterable<number>,
+  laneCount: number,
+  axes: { xAxisIndex: number; yAxisIndex: number } = {
+    xAxisIndex: 1,
+    yAxisIndex: 2,
+  }
+): echarts.LineSeriesOption {
+  const xs = Array.from(new Set(plottedXs)).sort((a, b) => a - b)
+  return {
+    id: QUALITY_SNAP_SERIES_ID,
+    name: QUALITY_SNAP_SERIES_ID,
+    type: 'line',
+    ...axes,
+    silent: true,
+    animation: false,
+    // 'none' rather than `showSymbol: false`, which still pops a hover symbol
+    // onto the strip at the snapped reading.
+    symbol: 'none',
+    lineStyle: { opacity: 0 },
+    emphasis: { disabled: true },
+    data: xs.map((x) => [x, laneCount / 2]),
   }
 }
 
@@ -474,6 +524,10 @@ export function buildQualityPreviewOption({
         (lane) => lane.tagColor ?? '#94a3b8',
         { xAxisIndex: 1, yAxisIndex: 1 }
       ),
+      buildLaneSnapSeries(rowsByTs.keys(), lanes.length, {
+        xAxisIndex: 1,
+        yAxisIndex: 1,
+      }),
     ],
   }
 }
@@ -655,7 +709,7 @@ export function buildObservationGraphOption({
 
   const axisLine = { lineStyle: { color: primaryColor } }
 
-  const laneSeries: echarts.CustomSeriesOption[] = hasLanes
+  const laneSeries: echarts.SeriesOption[] = hasLanes
     ? [
         buildQualityLaneSeries(qualityLanes, (lane) =>
           lane.id === primarySeries?.id
@@ -663,6 +717,12 @@ export function buildObservationGraphOption({
             : lane.id === secondarySeries?.id
               ? secondaryColor
               : '#94a3b8'
+        ),
+        buildLaneSnapSeries(
+          qualityLanes.flatMap((lane) =>
+            Array.from(rowsByPlottedX.get(lane.id)?.keys() ?? [])
+          ),
+          laneCount
         ),
       ]
     : []
@@ -700,7 +760,7 @@ export function buildObservationGraphOption({
         const lines = rows
           // The quality strip is a series to ECharts but not to the reader; it
           // is described by the line it sits under, not listed beside it.
-          .filter((row) => String(row?.seriesName ?? '') !== QUALITY_SERIES_ID)
+          .filter((row) => !isLaneSeries(row?.seriesName))
           .map((row) => {
             const entry = seriesEntries.find(
               (item) => item.id === String(row?.seriesName ?? '')

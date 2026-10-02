@@ -492,8 +492,10 @@ export default function ObservationGraph({
     zr.on('click', (event: { offsetX?: number; offsetY?: number }) => {
       const point = [event.offsetX ?? 0, event.offsetY ?? 0]
       // A click outside the plotting area dismisses — the gesture people
-      // already expect for closing a panel.
-      if (!chart.containPixel('grid', point)) {
+      // already expect for closing a panel. The quality strips count as inside:
+      // the crosshair and tooltip reach down through them, so a click there
+      // opens the reading they name rather than closing it.
+      if (!chart.containPixel({ gridIndex: [0, 1] }, point)) {
         setSelected(null)
         return
       }
