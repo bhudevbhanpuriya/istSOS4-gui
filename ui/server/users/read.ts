@@ -66,6 +66,10 @@ function messageOf(body: Record<string, unknown> | null): string {
  * Only the fields the popover shows ever leave the server. The list fallback
  * returns whole `"User"` rows, and pending auth work adds a bcrypt `password`
  * column to that table — a row must never be forwarded to the browser as-is.
+ *
+ * `contact` is forwarded whenever the API sent the column, even as null: its
+ * presence is how the popover knows the caller may see contact details, so
+ * "none on record" and "not yours to see" stay apart without a role check here.
  */
 function publicFields(row: Record<string, unknown>): UserDetails {
   const user: UserDetails = {
@@ -74,7 +78,7 @@ function publicFields(row: Record<string, unknown>): UserDetails {
     role: String(row.role ?? ''),
     uri: typeof row.uri === 'string' ? row.uri : null,
   }
-  if (row.contact != null) user.contact = row.contact
+  if ('contact' in row) user.contact = row.contact ?? null
   return user
 }
 

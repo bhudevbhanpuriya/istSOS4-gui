@@ -38,7 +38,10 @@ export type UserDetails = {
   username: string
   role: string
   uri?: string | null
-  /** Administrator-only; absent for every other caller. */
+  /**
+   * Administrator-only: absent for every other caller, null when the user has
+   * none on record.
+   */
   contact?: unknown
 }
 

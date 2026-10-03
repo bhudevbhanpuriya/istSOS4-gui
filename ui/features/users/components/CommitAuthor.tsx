@@ -115,30 +115,93 @@ function UserCard({ id, lookup }: { id: string; lookup: UserLookup | null }) {
   }
 
   const { user } = lookup
+  // Absent unless the server shares contact with this caller; then it may
+  // still be null or empty, which is worth saying rather than leaving out.
+  const sharesContact = user.contact !== undefined
   const contact = contactEntries(user.contact)
+  const separated = 'mt-1 border-t border-default-200 pt-1.5'
 
   return (
-    <dl className="grid w-full grid-cols-[auto_minmax(0,1fr)] gap-x-3 gap-y-1 text-tiny">
-      <dt className="text-default-400">{t('users.username')}</dt>
-      <dd className="font-semibold [overflow-wrap:anywhere]">{user.username}</dd>
-      <dt className="text-default-400">{t('users.role')}</dt>
-      <dd>{user.role}</dd>
-      <dt className="text-default-400">{t('users.id')}</dt>
-      <dd className="font-mono">{user.id}</dd>
-      {contact.map(([key, value]) => (
-        <ContactRow key={key} label={key} value={value} />
-      ))}
-    </dl>
+    <div className="w-full text-tiny">
+      <dl className="grid grid-cols-[auto_minmax(0,1fr)] gap-x-3 gap-y-1">
+        <dt className="text-default-400">{t('users.username')}</dt>
+        <dd className="font-semibold [overflow-wrap:anywhere]">{user.username}</dd>
+        <dt className="text-default-400">{t('users.role')}</dt>
+        <dd>{user.role}</dd>
+        <dt className="text-default-400">{t('users.id')}</dt>
+        <dd className="font-mono">{user.id}</dd>
+        {sharesContact && contact.length === 0 && (
+          <>
+            <dt className={`text-default-400 ${separated}`}>{t('users.contact')}</dt>
+            <dd className={`text-default-500 ${separated}`}>{t('users.contact_none')}</dd>
+          </>
+        )}
+        {contact.map(([key, value], index) => (
+          <ContactRow
+            key={key}
+            label={key}
+            value={value}
+            className={index === 0 ? separated : ''}
+          />
+        ))}
+      </dl>
+      {sharesContact && (
+        <p className="mt-2 text-default-400">{t('users.contact_admin_only')}</p>
+      )}
+    </div>
   )
 }
 
-function ContactRow({ label, value }: { label: string; value: string }) {
+function ContactRow({
+  label,
+  value,
+  className,
+}: {
+  label: string
+  value: string
+  className: string
+}) {
+  const href = contactHref(label, value)
   return (
     <>
-      <dt className="text-default-400">{label}</dt>
-      <dd className="[overflow-wrap:anywhere]">{value}</dd>
+      <dt className={`text-default-400 ${className}`}>{label}</dt>
+      <dd className={`[overflow-wrap:anywhere] ${className}`}>
+        {href ? (
+          <a
+            href={href}
+            className="text-primary underline-offset-2 hover:underline"
+            {...(href.startsWith('http')
+              ? { target: '_blank', rel: 'noopener noreferrer' }
+              : {})}
+          >
+            {value}
+          </a>
+        ) : (
+          value
+        )}
+      </dd>
     </>
   )
+}
+
+const EMAIL = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
+const WEB_ADDRESS = /^https?:\/\/\S+$/i
+const PHONE_KEY = /phone|mobile|tel/i
+const PHONE = /^\+?[\d\s().-]+$/
+
+/**
+ * A link for a value that is plainly an email address, web address or — under
+ * a phone-like key, so ids and postcodes stay text — a phone number. Only these
+ * three schemes are produced: `contact` is free text from the API.
+ */
+function contactHref(key: string, value: string): string | null {
+  if (EMAIL.test(value)) return `mailto:${value}`
+  if (WEB_ADDRESS.test(value)) return value
+  if (PHONE_KEY.test(key) && PHONE.test(value)) {
+    const digits = value.replace(/[^\d+]/g, '')
+    if (digits.replace('+', '').length >= 6) return `tel:${digits}`
+  }
+  return null
 }
 
 /** `contact` is free jsonb: flatten one level for display, stringify the rest. */
